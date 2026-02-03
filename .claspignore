@@ -1,0 +1,4 @@
+# Ignore everything except src/ and appsscript.json
+**/**
+!src/**
+!appsscript.json
