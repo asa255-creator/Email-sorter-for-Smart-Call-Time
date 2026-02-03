@@ -84,6 +84,7 @@ function getLabelByName(labelName) {
 
 /**
  * Syncs Gmail labels to the Labels sheet.
+ * Preserves user-entered Description column (E).
  * Called manually or during setup.
  */
 function syncLabelsToSheet() {
@@ -98,33 +99,43 @@ function syncLabelsToSheet() {
   const labels = getGmailLabels();
   const now = new Date().toISOString();
 
-  // Clear existing data (keep header)
+  // Get existing descriptions to preserve them
+  const existingDescriptions = {};
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) {
-    sheet.getRange(2, 1, lastRow - 1, 5).clear();
+    const existingData = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+    existingData.forEach(row => {
+      if (row[0] && row[4]) {
+        existingDescriptions[row[0].toLowerCase()] = row[4]; // name -> description
+      }
+    });
   }
 
-  // Prepare data rows
+  // Clear existing data (keep header)
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, 6).clear();
+  }
+
+  // Prepare data rows, preserving descriptions
   const data = labels.map(label => [
     label.name,
     label.id,
     label.nestedPath,
     label.type,
+    existingDescriptions[label.name.toLowerCase()] || '', // Preserve description
     now
   ]);
 
   // Write to sheet
   if (data.length > 0) {
-    sheet.getRange(2, 1, data.length, 5).setValues(data);
+    sheet.getRange(2, 1, data.length, 6).setValues(data);
   }
 
-  sheet.autoResizeColumns(1, 5);
+  sheet.autoResizeColumns(1, 4);
+  sheet.autoResizeColumn(6);
 
   // Update config
   setConfigValue('last_label_sync', now);
-
-  // Update instructions with new labels
-  updateInstructionsLabels(labels);
 
   logAction('SYSTEM', 'SYNC', `Synced ${labels.length} labels`);
 
@@ -133,7 +144,7 @@ function syncLabelsToSheet() {
 
 /**
  * Gets labels from the Labels sheet (faster than Gmail API).
- * @returns {Object[]} Array of label objects
+ * @returns {Object[]} Array of label objects including description
  */
 function getLabelsFromSheet() {
   const ss = SpreadsheetApp.getActive();
@@ -144,13 +155,14 @@ function getLabelsFromSheet() {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
 
-  const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+  const data = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
 
   return data.map(row => ({
     name: row[0],
     id: row[1],
     nestedPath: row[2],
-    type: row[3]
+    type: row[3],
+    description: row[4] || ''
   }));
 }
 
