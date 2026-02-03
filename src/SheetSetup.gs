@@ -57,8 +57,8 @@ function createLabelsSheet(ss) {
 
   sheet.clear();
 
-  // Headers
-  const headers = ['Label Name', 'Label ID', 'Nested Path', 'Type', 'Last Updated'];
+  // Headers - Description column (E) is editable for AI context
+  const headers = ['Label Name', 'Label ID', 'Nested Path', 'Type', 'Description', 'Last Updated'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(1, 1, 1, headers.length)
     .setFontWeight('bold')
@@ -68,10 +68,15 @@ function createLabelsSheet(ss) {
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, headers.length);
 
+  // Make Description column wider for editing
+  sheet.setColumnWidth(5, 300);
+
   // Add note
   sheet.getRange('A1').setNote(
     'This sheet contains all your Gmail labels.\n' +
-    'Google Flows can read this sheet to get available labels.\n\n' +
+    'Google Flows reads this sheet to get available labels.\n\n' +
+    'Column E (Description) is for your use - add descriptions\n' +
+    'to help the AI understand what each label is for.\n\n' +
     'Refresh via: Smart Call Time > Email Sorter > Sync Labels Now'
   );
 }
@@ -165,12 +170,8 @@ function createInstructionsSheet(ss) {
 
   sheet.clear();
 
-  // Get labels for prompt
-  const labels = getGmailLabels();
-  const labelList = labels.map(l => l.name).join(', ');
-
   // Build instructions
-  const content = buildInstructionsContent(labelList);
+  const content = buildInstructionsContent();
 
   // Write content
   sheet.getRange(1, 1, content.length, 1).setValues(content);
@@ -193,130 +194,111 @@ function createInstructionsSheet(ss) {
 
 /**
  * Builds the instructions content array.
- * @param {string} labelList - Comma-separated label names
  * @returns {Array} Array of instruction rows
  */
-function buildInstructionsContent(labelList) {
+function buildInstructionsContent() {
   return [
-    ['SMART CALL TIME - EMAIL SORTER SETUP'],
+    ['SMART CALL TIME - EMAIL SORTER'],
     [''],
-    ['This sheet-based system lets Google Flows automatically sort your emails into labels.'],
-    ['Google Flows reads and writes directly to this spreadsheet - no webhooks or APIs needed.'],
+    ['This system lets Google Flows automatically sort your emails using the Labels sheet.'],
+    ['Flow reads labels dynamically from this spreadsheet - no hardcoded values.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
     ['HOW IT WORKS'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['1. Labels sheet: Contains all your Gmail labels (synced from Gmail)'],
-    ['2. Queue sheet: Where emails are processed'],
-    ['3. Google Flow reads Labels sheet and writes to Queue sheet'],
-    ['4. Script automatically applies labels when Queue is updated'],
+    ['1. Labels sheet: Your Gmail labels with optional descriptions'],
+    ['2. Queue sheet: Temporary processing area (rows deleted after labeling)'],
+    ['3. Flow reads Labels sheet, writes to Queue, script applies labels'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
-    ['GOOGLE FLOW FOR NEW EMAILS'],
+    ['GOOGLE FLOW SETUP'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['Trigger: When a new email arrives in Gmail'],
+    ['TRIGGER: When a new email arrives in Gmail'],
     [''],
-    ['Actions:'],
-    ['1. Read the "Labels" sheet to get available label names'],
-    ['2. Use AI to select appropriate labels (see prompt below)'],
-    ['3. Add a row to the "Queue" sheet with:'],
-    ['   - Email ID (from Gmail trigger)'],
-    ['   - Subject'],
-    ['   - From'],
-    ['   - Date'],
-    ['   - Labels to Apply (comma-separated labels from AI)'],
+    ['FLOW STEPS:'],
+    [''],
+    ['Step 1: Read the "Labels" sheet from this spreadsheet'],
+    ['   - Get all rows from Labels sheet'],
+    ['   - This gives you Label Name and Description for each label'],
+    [''],
+    ['Step 2: Build the AI prompt dynamically'],
+    ['   - Insert the label names (and descriptions) from Step 1 into the prompt'],
+    ['   - See AI PROMPT TEMPLATE below'],
+    [''],
+    ['Step 3: Send to AI with email details'],
+    ['   - Include sender, subject, body preview from the email trigger'],
+    [''],
+    ['Step 4: Add row to "Queue" sheet'],
+    ['   - Email ID, Subject, From, Date'],
+    ['   - Labels to Apply: AI response (comma-separated labels)'],
     ['   - Status: "Pending"'],
     [''],
-    ['The script will automatically apply labels when the row is added.'],
+    ['The script automatically applies labels and removes the row from Queue.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
-    ['GOOGLE FLOW FOR OLD EMAILS (QUEUE PROCESSING)'],
+    ['AI PROMPT TEMPLATE'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['To process existing unread emails:'],
+    ['Use this template in your Flow. Replace placeholders with dynamic values:'],
     [''],
-    ['1. Run: Menu > Smart Call Time > Email Sorter > Queue Unread Emails'],
-    ['   This adds unread emails to the Queue sheet with Status = "Pending"'],
+    ['--- PROMPT TEMPLATE ---'],
+    ['You are an email categorization assistant.'],
     [''],
-    ['2. Create a Flow triggered when Queue sheet rows are modified'],
-    ['   Filter: Status column = "Pending" AND "Labels to Apply" is empty'],
+    ['AVAILABLE LABELS (from Labels sheet):'],
+    ['{Insert label names and descriptions from Labels sheet here}'],
     [''],
-    ['3. Flow actions:'],
-    ['   - Get the Email ID from the row'],
-    ['   - Use Gmail connector to fetch email details (subject, body, sender)'],
-    ['   - Use AI to select labels'],
-    ['   - Update the row: Set "Labels to Apply" column with comma-separated labels'],
+    ['EMAIL TO CATEGORIZE:'],
+    ['From: {email sender from trigger}'],
+    ['Subject: {email subject from trigger}'],
+    ['Body: {email body preview from trigger}'],
     [''],
-    ['4. The script automatically applies labels when you update the column'],
-    [''],
-    ['═══════════════════════════════════════════════════════════════'],
-    ['AI PROMPT FOR LABEL SELECTION'],
-    ['═══════════════════════════════════════════════════════════════'],
-    [''],
-    ['Copy this prompt into your Google Flow AI step:'],
-    [''],
-    ['--- COPY FROM HERE ---'],
-    ['You are an email categorization assistant. Select the most appropriate labels.'],
-    [''],
-    ['AVAILABLE LABELS:'],
-    [labelList || '(No labels found - create labels in Gmail first)'],
-    [''],
-    ['EMAIL:'],
-    ['From: {sender}'],
-    ['Subject: {subject}'],
-    ['Body: {body_preview}'],
-    [''],
-    ['RULES:'],
+    ['INSTRUCTIONS:'],
     ['1. Select 1-3 labels that best fit this email'],
-    ['2. ONLY use labels from the AVAILABLE LABELS list'],
-    ['3. If nothing fits, respond with: NONE'],
+    ['2. ONLY use labels from the AVAILABLE LABELS list above'],
+    ['3. If no labels fit, respond with: NONE'],
     [''],
-    ['RESPOND WITH ONLY the label names, comma-separated.'],
-    ['Example: Work, Important'],
-    ['--- COPY TO HERE ---'],
+    ['Respond with ONLY the label names, comma-separated. Example: Work, Clients'],
+    ['--- END TEMPLATE ---'],
     [''],
-    ['═══════════════════════════════════════════════════════════════'],
-    ['SHEET REFERENCE'],
-    ['═══════════════════════════════════════════════════════════════'],
-    [''],
-    ['LABELS SHEET - Your Gmail labels'],
-    ['  Columns: Label Name, Label ID, Nested Path, Type, Last Updated'],
-    ['  Use "Label Name" column in your Flow'],
-    [''],
-    ['QUEUE SHEET - Email processing queue'],
-    ['  Columns: Email ID, Subject, From, Date, Labels to Apply, Status, Processed At'],
-    ['  Status values: Pending → Processing → Complete/Error/Skipped'],
-    ['  Flow writes to "Labels to Apply" column (comma-separated label names)'],
+    ['IMPORTANT: Your Flow must read the Labels sheet and insert those values'],
+    ['into the prompt. Do NOT hardcode label names in the Flow.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
-    ['SYNCING LABELS'],
+    ['SHEET COLUMNS'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['Labels are synced automatically during setup.'],
-    ['To refresh: Menu > Smart Call Time > Email Sorter > Sync Labels Now'],
+    ['LABELS SHEET:'],
+    ['  A: Label Name - The Gmail label name'],
+    ['  B: Label ID - Gmail internal ID (auto-filled)'],
+    ['  C: Nested Path - Full path for nested labels'],
+    ['  D: Type - user or system'],
+    ['  E: Description - Your description for AI context (editable)'],
+    ['  F: Last Updated - Sync timestamp'],
     [''],
-    ['The Labels sheet always reflects your current Gmail labels.'],
+    ['QUEUE SHEET:'],
+    ['  A: Email ID - Gmail message ID'],
+    ['  B: Subject'],
+    ['  C: From'],
+    ['  D: Date'],
+    ['  E: Labels to Apply - Comma-separated (Flow fills this)'],
+    ['  F: Status - Pending/Processing/Error'],
+    ['  G: Processed At'],
+    [''],
+    ['  Note: Rows are DELETED after labels are successfully applied.'],
+    ['  Error rows remain for review.'],
+    [''],
+    ['═══════════════════════════════════════════════════════════════'],
+    ['MENU OPTIONS'],
+    ['═══════════════════════════════════════════════════════════════'],
+    [''],
+    ['Smart Call Time > Email Sorter:'],
+    ['  - Setup / Refresh: Re-run initial setup'],
+    ['  - Sync Labels Now: Update Labels sheet from Gmail'],
+    ['  - Queue Unread Emails: Add unread emails to Queue for processing'],
+    ['  - Process All Pending: Manually process queued items'],
+    ['  - Clear Queue: Remove all items from Queue'],
   ];
 }
 
-/**
- * Updates the Instructions sheet with current labels.
- * @param {Object[]} labels - Array of label objects
- */
-function updateInstructionsLabels(labels) {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Instructions');
-
-  if (!sheet) return;
-
-  const data = sheet.getDataRange().getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (data[i][0] === 'AVAILABLE LABELS:') {
-      const labelList = labels.map(l => l.name).join(', ') || '(No labels found)';
-      sheet.getRange(i + 2, 1).setValue(labelList);
-      break;
-    }
-  }
-}

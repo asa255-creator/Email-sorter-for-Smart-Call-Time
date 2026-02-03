@@ -104,16 +104,18 @@ function getExistingQueueIds(sheet) {
 
 /**
  * Processes a single queue row when the "Labels to Apply" column is updated.
+ * Deletes the row after successful processing (Queue is temporary, not a log).
  * Called by the onEdit trigger.
  * @param {number} rowNumber - The row number that was edited
+ * @returns {boolean} True if row was deleted (for batch processing offset)
  */
 function processQueueRow(rowNumber) {
   // Skip header row
-  if (rowNumber <= 1) return;
+  if (rowNumber <= 1) return false;
 
   const ss = SpreadsheetApp.getActive();
   const sheet = ss.getSheetByName('Queue');
-  if (!sheet) return;
+  if (!sheet) return false;
 
   // Read the row
   const row = sheet.getRange(rowNumber, 1, 1, 7).getValues()[0];
@@ -125,18 +127,17 @@ function processQueueRow(rowNumber) {
   // - We have labels to apply
   // - Status is still "Pending"
   if (!labelsToApply || labelsToApply.trim() === '' || status !== 'Pending') {
-    return;
+    return false;
   }
 
   // Parse labels (comma-separated)
   const labels = parseLabelsString(labelsToApply);
 
-  // Handle NONE or empty
+  // Handle NONE or empty - delete row since there's nothing to do
   if (labels.length === 0) {
-    sheet.getRange(rowNumber, 6).setValue('Skipped');
-    sheet.getRange(rowNumber, 7).setValue(new Date().toISOString());
     logAction(emailId, 'SKIP', 'No labels to apply');
-    return;
+    sheet.deleteRow(rowNumber);
+    return true;
   }
 
   // Set status to Processing
@@ -146,20 +147,22 @@ function processQueueRow(rowNumber) {
     // Apply labels
     const result = applyLabelsToEmail(emailId, labels);
 
-    // Update status
-    sheet.getRange(rowNumber, 6).setValue('Complete');
-    sheet.getRange(rowNumber, 7).setValue(new Date().toISOString());
+    // Success - delete the row from queue
+    sheet.deleteRow(rowNumber);
+    return true;
 
   } catch (error) {
-    // Handle error
+    // Handle error - keep row for review
     sheet.getRange(rowNumber, 6).setValue('Error');
     sheet.getRange(rowNumber, 7).setValue(new Date().toISOString());
     logAction(emailId, 'ERROR', error.message);
+    return false;
   }
 }
 
 /**
  * Processes all pending items in the queue.
+ * Processes from bottom to top to handle row deletions correctly.
  * Called via menu: Smart Call Time > Email Sorter > Process All Pending
  */
 function processAllPending() {
@@ -170,26 +173,24 @@ function processAllPending() {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return;
 
-  const data = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
   const rateLimit = parseInt(getConfigValue('rate_limit_ms') || '3000');
-
   let processed = 0;
 
-  data.forEach((row, index) => {
+  // Process from bottom to top so row deletions don't affect indexes
+  for (let rowNum = lastRow; rowNum >= 2; rowNum--) {
+    const row = sheet.getRange(rowNum, 1, 1, 7).getValues()[0];
     const labelsToApply = row[4];
     const status = row[5];
 
     // Only process Pending rows with labels
     if (labelsToApply && labelsToApply.trim() !== '' && status === 'Pending') {
-      processQueueRow(index + 2);
+      processQueueRow(rowNum);
       processed++;
 
       // Rate limiting
-      if (processed < data.length) {
-        Utilities.sleep(rateLimit);
-      }
+      Utilities.sleep(rateLimit);
     }
-  });
+  }
 
   logAction('SYSTEM', 'BATCH', `Processed ${processed} pending items`);
 }
