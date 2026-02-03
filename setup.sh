@@ -68,15 +68,13 @@ case $choice in
         # Remove existing .clasp.json if present
         rm -f .clasp.json
 
-        clasp create --type sheets --title "Smart Call Time - Flow Integrator"
+        # Capture clasp create output to get URLs
+        CREATE_OUTPUT=$(clasp create --type sheets --title "Smart Call Time - Flow Integrator" 2>&1)
+        echo "$CREATE_OUTPUT"
 
         echo ""
         echo "Pushing code to Google..."
         clasp push
-
-        echo ""
-        echo "Opening spreadsheet in browser..."
-        clasp open
 
         echo ""
         echo "============================================"
@@ -85,11 +83,11 @@ case $choice in
         echo ""
         echo "Next steps:"
         echo ""
-        echo "  1. REFRESH the spreadsheet in your browser"
-        echo "  2. Click: Smart Call Time > Email Sorter > Setup"
-        echo "  3. Grant permissions when prompted"
-        echo "  4. Go to Extensions > Apps Script > Deploy > New deployment"
-        echo "  5. Select 'Web app' and deploy"
+        echo "  1. Find the Google Sheets URL in the output above"
+        echo "  2. Open that URL in your browser"
+        echo "  3. REFRESH the page"
+        echo "  4. Click: Smart Call Time > Email Sorter > Setup"
+        echo "  5. Grant permissions when prompted"
         echo ""
         ;;
 
@@ -115,15 +113,12 @@ EOF
         clasp push
 
         echo ""
-        echo "Opening in browser..."
-        clasp open
-
-        echo ""
         echo "============================================"
         echo "  PUSH COMPLETE!"
         echo "============================================"
         echo ""
-        echo "Refresh your document and run Setup from the menu."
+        echo "Open your spreadsheet in the browser, refresh, and run:"
+        echo "  Smart Call Time > Email Sorter > Setup"
         echo ""
         ;;
 
