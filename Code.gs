@@ -4,18 +4,53 @@
  * This Google Apps Script integrates Gmail with Google Chat and Google Flows
  * to automatically sort emails into labels using AI-powered categorization.
  *
- * Setup Instructions:
- * 1. Create a new Google Apps Script project
- * 2. Copy this code into Code.gs
- * 3. Enable the Google Chat API in your project (Resources > Advanced Google Services)
- * 4. Run onboardingSetup() to create the Chat spaces
- * 5. Deploy as a Chat app (Publish > Deploy from manifest)
- * 6. Configure Google Flows using the instructions posted to the visible Chat space
+ * SETUP INSTRUCTIONS:
+ * 1. Create TWO Google Chat spaces manually:
+ *    - "Email Sorter - Automated" (you can mute notifications for this one)
+ *    - "Email Sorter - Instructions" (keep notifications on for label recommendations)
+ *
+ * 2. Add an incoming webhook to EACH space:
+ *    - Click the space name > Apps & integrations > Add webhooks
+ *    - Name it "Email Sorter Bot"
+ *    - Copy the webhook URL
+ *
+ * 3. Run configureWebhooks() and paste the URLs when prompted
+ *    OR manually edit WEBHOOK_URLS below
+ *
+ * 4. Run postSetupInstructions() to post the Flow setup guide to your instructions space
+ *
+ * 5. Deploy this script as a web app:
+ *    - Deploy > New deployment > Web app
+ *    - Execute as: Me
+ *    - Who has access: Anyone
+ *    - Copy the web app URL for use in Google Flows
  */
 
 // ============================================================================
-// CONFIGURATION
+// CONFIGURATION - EDIT THESE VALUES
 // ============================================================================
+
+/**
+ * PASTE YOUR WEBHOOK URLs HERE after creating the Chat spaces
+ *
+ * To get webhook URLs:
+ * 1. Open Google Chat
+ * 2. Create or open a space
+ * 3. Click the space name at the top
+ * 4. Click "Apps & integrations"
+ * 5. Click "Add webhooks"
+ * 6. Enter a name like "Email Sorter Bot" and click Save
+ * 7. Copy the webhook URL
+ */
+const WEBHOOK_URLS = {
+  // Paste your automated space webhook URL here (for machine-to-machine messages)
+  // You can mute notifications for this space in Chat settings
+  AUTOMATED: '',
+
+  // Paste your instructions space webhook URL here (for setup instructions and label recommendations)
+  // Keep notifications on so you see label recommendations
+  INSTRUCTIONS: ''
+};
 
 const CONFIG = {
   // Rate limiting for processing old emails (milliseconds between each email)
@@ -32,163 +67,208 @@ const CONFIG = {
     'CHAT', 'OPENED', 'SNOOZED'
   ],
 
-  // Property keys for storing space IDs and processing state
+  // Property keys for storing processing state
   PROPS: {
-    AUTOMATED_SPACE_ID: 'automatedSpaceId',
-    INSTRUCTIONS_SPACE_ID: 'instructionsSpaceId',
     PROCESSING_STATE: 'processingState',
-    PROCESSED_EMAIL_IDS: 'processedEmailIds'
+    AUTOMATED_WEBHOOK: 'automatedWebhook',
+    INSTRUCTIONS_WEBHOOK: 'instructionsWebhook'
   }
 };
 
 // ============================================================================
-// ONBOARDING & SETUP
+// WEBHOOK CONFIGURATION
 // ============================================================================
 
 /**
- * Main onboarding function - creates both Chat spaces and posts instructions.
- * Run this once to set up the system.
+ * Interactive function to configure webhook URLs.
+ * Run this and check the logs, then update WEBHOOK_URLS above.
  */
-function onboardingSetup() {
-  const props = PropertiesService.getScriptProperties();
+function configureWebhooks() {
+  const ui = SpreadsheetApp.getUi ? SpreadsheetApp.getUi() : null;
 
-  console.log('Starting onboarding setup...');
+  console.log('=== WEBHOOK CONFIGURATION ===');
+  console.log('');
+  console.log('To configure webhooks, please edit the WEBHOOK_URLS object at the top of Code.gs');
+  console.log('');
+  console.log('Steps to get webhook URLs:');
+  console.log('1. Open Google Chat (chat.google.com)');
+  console.log('2. Create a new space or open an existing one');
+  console.log('3. Click the space name at the top');
+  console.log('4. Click "Apps & integrations"');
+  console.log('5. Click "Add webhooks"');
+  console.log('6. Enter a name like "Email Sorter Bot"');
+  console.log('7. Click Save and copy the webhook URL');
+  console.log('');
+  console.log('You need TWO spaces:');
+  console.log('- AUTOMATED: For machine messages (you can mute this space)');
+  console.log('- INSTRUCTIONS: For setup guide and label recommendations');
+  console.log('');
 
-  // Create the automated (hidden) space for machine-to-machine communication
-  const automatedSpace = createChatSpace(
-    'Email Sorter - Automated',
-    'Automated messaging space for email sorting system. This space handles label requests and applications.',
-    true // hidden/muted
-  );
+  // Check current configuration
+  const automatedConfigured = WEBHOOK_URLS.AUTOMATED && WEBHOOK_URLS.AUTOMATED.length > 0;
+  const instructionsConfigured = WEBHOOK_URLS.INSTRUCTIONS && WEBHOOK_URLS.INSTRUCTIONS.length > 0;
 
-  if (automatedSpace) {
-    props.setProperty(CONFIG.PROPS.AUTOMATED_SPACE_ID, automatedSpace.name);
-    console.log('Created automated space: ' + automatedSpace.name);
+  console.log('Current status:');
+  console.log('- Automated webhook: ' + (automatedConfigured ? 'CONFIGURED' : 'NOT SET'));
+  console.log('- Instructions webhook: ' + (instructionsConfigured ? 'CONFIGURED' : 'NOT SET'));
+
+  if (automatedConfigured && instructionsConfigured) {
+    console.log('');
+    console.log('Both webhooks are configured! You can now:');
+    console.log('1. Run testWebhooks() to verify they work');
+    console.log('2. Run postSetupInstructions() to post the Flow setup guide');
   }
-
-  // Create the visible space for instructions and recommendations
-  const instructionsSpace = createChatSpace(
-    'Email Sorter - Instructions & Recommendations',
-    'Setup instructions and label recommendations for the email sorting system.',
-    false // visible
-  );
-
-  if (instructionsSpace) {
-    props.setProperty(CONFIG.PROPS.INSTRUCTIONS_SPACE_ID, instructionsSpace.name);
-    console.log('Created instructions space: ' + instructionsSpace.name);
-
-    // Post setup instructions to the visible space
-    postSetupInstructions(instructionsSpace.name);
-  }
-
-  console.log('Onboarding setup complete!');
-  console.log('Automated Space ID: ' + props.getProperty(CONFIG.PROPS.AUTOMATED_SPACE_ID));
-  console.log('Instructions Space ID: ' + props.getProperty(CONFIG.PROPS.INSTRUCTIONS_SPACE_ID));
-
-  return {
-    automatedSpaceId: props.getProperty(CONFIG.PROPS.AUTOMATED_SPACE_ID),
-    instructionsSpaceId: props.getProperty(CONFIG.PROPS.INSTRUCTIONS_SPACE_ID)
-  };
 }
 
 /**
- * Creates a Google Chat space with the specified settings.
- * @param {string} displayName - The name of the space
- * @param {string} description - Description of the space
- * @param {boolean} muted - Whether to create as a muted/hidden space
- * @returns {Object} The created space object
+ * Tests that both webhooks are working by sending a test message.
  */
-function createChatSpace(displayName, description, muted) {
-  try {
-    const space = Chat.Spaces.create({
-      spaceType: 'SPACE',
-      displayName: displayName,
-      spaceDetails: {
-        description: description
-      },
-      // For muted spaces, we set it as a space that doesn't generate notifications
-      // Note: Full notification control may require additional user settings
-    });
+function testWebhooks() {
+  console.log('Testing webhooks...');
 
-    return space;
+  if (!WEBHOOK_URLS.AUTOMATED) {
+    console.error('ERROR: Automated webhook URL not configured');
+    return false;
+  }
+
+  if (!WEBHOOK_URLS.INSTRUCTIONS) {
+    console.error('ERROR: Instructions webhook URL not configured');
+    return false;
+  }
+
+  // Test automated webhook
+  try {
+    sendWebhookMessage(WEBHOOK_URLS.AUTOMATED, 'Test message from Email Sorter - Automated channel working!');
+    console.log('Automated webhook: OK');
   } catch (error) {
-    console.error('Error creating Chat space: ' + error.message);
-    console.log('Make sure the Google Chat API is enabled in Advanced Google Services');
-    return null;
+    console.error('Automated webhook FAILED: ' + error.message);
+    return false;
+  }
+
+  // Test instructions webhook
+  try {
+    sendWebhookMessage(WEBHOOK_URLS.INSTRUCTIONS, 'Test message from Email Sorter - Instructions channel working!');
+    console.log('Instructions webhook: OK');
+  } catch (error) {
+    console.error('Instructions webhook FAILED: ' + error.message);
+    return false;
+  }
+
+  console.log('');
+  console.log('All webhooks working! You can now run postSetupInstructions()');
+  return true;
+}
+
+/**
+ * Sends a message to a Chat space via webhook.
+ * @param {string} webhookUrl - The webhook URL
+ * @param {string} text - The message text
+ */
+function sendWebhookMessage(webhookUrl, text) {
+  const payload = {
+    text: text
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload)
+  };
+
+  const response = UrlFetchApp.fetch(webhookUrl, options);
+
+  if (response.getResponseCode() !== 200) {
+    throw new Error('Webhook returned status ' + response.getResponseCode());
   }
 }
+
+// ============================================================================
+// SETUP INSTRUCTIONS
+// ============================================================================
 
 /**
  * Posts the setup instructions to the instructions Chat space.
- * @param {string} spaceId - The space ID to post to
+ * Run this after configuring webhooks.
  */
-function postSetupInstructions(spaceId) {
-  const instructions = `
-*Email Sorter Setup Instructions*
+function postSetupInstructions() {
+  if (!WEBHOOK_URLS.INSTRUCTIONS) {
+    console.error('ERROR: Instructions webhook URL not configured. Run configureWebhooks() first.');
+    return;
+  }
+
+  // Get the web app URL if deployed
+  let webAppUrl = '[YOUR_WEB_APP_URL]';
+  try {
+    webAppUrl = ScriptApp.getService().getUrl() || '[Deploy as web app to get URL]';
+  } catch (e) {
+    // Not deployed yet
+  }
+
+  // Get current labels to include in the instructions
+  const labels = getUserLabels();
+  const labelListForPrompt = labels.join(', ');
+
+  const instructions = `*Email Sorter Setup Instructions*
 
 This system integrates Google Flows with Gmail to automatically sort your emails using AI-powered categorization.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-*STEP 1: Deploy this Apps Script as a Chat App*
+*YOUR CURRENT LABELS*
+${labels.length > 0 ? labels.map(l => '• ' + l).join('\n') : '(No user labels found)'}
 
-1. In Apps Script, go to Deploy > New deployment
-2. Select type: "Add-on" or use Chat API directly
-3. Configure the Chat app to respond to messages in the automated space
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*WEB APP URL (for Flows)*
+${webAppUrl}
 
-*STEP 2: Create Google Flow for NEW EMAILS*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*FLOW 1: NEW EMAIL PROCESSING*
 
 Trigger: When a new email arrives in Gmail
 
-Flow Steps:
-1. Get the email ID from the trigger
-2. Send a Chat message to the automated space:
-   \`REQUEST_LABELS|{emailId}\`
-3. Wait for response (contains available labels)
-4. Use AI/logic to determine which labels apply based on email content
-5. Send a Chat message:
-   \`APPLY_LABELS|{emailId}|label1,label2,label3\`
-   (If recommending a new label, send: \`RECOMMEND_LABEL|{suggestedLabelName}|{reason}\`)
+Steps:
+1. HTTP Request to get labels:
+   POST ${webAppUrl}
+   Body: {"command": "REQUEST_LABELS", "emailId": "{emailId}"}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. Parse response to get label list
 
-*STEP 3: Create Google Flow for OLD EMAIL PROCESSING*
+3. Use AI to select labels (see prompt below)
 
-Trigger: When a Chat message is received with format \`PROCESS_EMAIL|{emailId}\`
+4. HTTP Request to apply labels:
+   POST ${webAppUrl}
+   Body: {"command": "APPLY_LABELS", "emailId": "{emailId}", "labels": ["Label1", "Label2"]}
 
-Flow Steps:
-1. Parse the email ID from the message
-2. Fetch the email content using the Gmail connector
-3. Use AI/logic to determine which labels apply
-4. Send a Chat message:
-   \`APPLY_LABELS|{emailId}|label1,label2,label3\`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*FLOW 2: OLD EMAIL CLEANUP*
+(Triggered by this script)
 
-*MESSAGE FORMAT REFERENCE*
+Trigger: When a message is received in the Automated Chat space containing "PROCESS_EMAIL"
 
-Messages FROM this script:
-• \`REQUEST_LABELS|{emailId}\` - Flow should respond with label selection
-• \`LABELS_LIST|{emailId}|label1,label2,label3,...\` - Available labels
-• \`PROCESS_EMAIL|{emailId}\` - Requesting Flow to process an old email
+Steps:
+1. Parse the email ID from the message (format: PROCESS_EMAIL|{emailId})
 
-Messages TO this script:
-• \`APPLY_LABELS|{emailId}|label1,label2\` - Apply these labels to email
-• \`RECOMMEND_LABEL|{labelName}|{reason}\` - Suggest a new label (posted here for review)
+2. Use Gmail connector to get email details
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. Use AI to select labels (see prompt below)
 
-*PROMPT TEMPLATE FOR AI LABEL SELECTION*
+4. HTTP Request to apply labels:
+   POST ${webAppUrl}
+   Body: {"command": "APPLY_LABELS", "emailId": "{emailId}", "labels": ["Label1", "Label2"]}
 
-Copy this prompt for use in your Google Flow AI step:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*AI PROMPT FOR LABEL SELECTION*
+(Copy this into your Flow's AI step)
 
 \`\`\`
 You are an email categorization assistant. Given the following email and list of available labels, select the most appropriate labels to apply.
 
 Available Labels:
-{labels_list}
+${labelListForPrompt}
 
 Email Details:
 From: {sender}
@@ -197,198 +277,141 @@ Body Preview: {body_preview}
 
 Instructions:
 1. Select 1-3 labels that best categorize this email
-2. Only use labels from the provided list
-3. If no labels fit well, respond with "NONE"
-4. If you think a new label should be created, note it separately
+2. ONLY use labels from the provided list above
+3. If no labels fit well, respond with just: NONE
+4. If you think a new label should be created, note it after your selection
 
-Respond in this exact format:
+Respond in this exact format (labels on one line, comma-separated):
 LABELS: label1, label2
-RECOMMEND_NEW: (optional) suggested_label_name - reason
+RECOMMEND_NEW: suggested_label_name (optional)
 \`\`\`
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-*RUNNING THE ONE-TIME CLEANUP*
+*MESSAGE FORMATS*
 
-To process all existing unread emails:
-1. Run the \`processUnreadEmails()\` function from Apps Script
-2. Progress will be logged to the console
-3. Emails will be sent to the Flow one at a time with rate limiting
-4. Run \`clearProcessingData()\` if you need to restart
+Request labels:
+POST Body: {"command": "REQUEST_LABELS", "emailId": "abc123"}
+Response: {"success": true, "emailId": "abc123", "labels": ["Work", "Personal", ...]}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Apply labels:
+POST Body: {"command": "APPLY_LABELS", "emailId": "abc123", "labels": ["Work", "Important"]}
+Response: {"success": true, "emailId": "abc123", "result": {"applied": ["Work", "Important"], "notFound": []}}
 
-Setup complete! Label recommendations from the Flow will appear in this space.
+Recommend label (optional - posts to this channel):
+POST Body: {"command": "RECOMMEND_LABEL", "labelName": "Invoices", "reason": "Many invoice-related emails"}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*RUNNING OLD EMAIL CLEANUP*
+
+1. Make sure Flow 2 is active and listening
+2. In Apps Script, run: processUnreadEmails()
+3. The script will send emails one-by-one to the automated channel
+4. Flow 2 will process each and apply labels
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Setup complete! Label recommendations will appear in this channel.
 `;
 
-  sendChatMessage(spaceId, instructions);
+  sendWebhookMessage(WEBHOOK_URLS.INSTRUCTIONS, instructions);
+  console.log('Setup instructions posted to the instructions channel!');
+  console.log('Check your Google Chat space to see them.');
 }
 
 // ============================================================================
-// CHAT MESSAGE HANDLING
+// WEB APP HANDLERS (Called by Google Flows)
 // ============================================================================
 
 /**
- * Handles incoming Chat messages. This is the main entry point for Chat app events.
- * Deploy this function as the Chat app's message handler.
- * @param {Object} event - The Chat event object
- * @returns {Object} Response to send back to Chat
+ * Handles GET requests - returns basic info.
  */
-function onMessage(event) {
-  const message = event.message.text;
-  const spaceId = event.space.name;
-
-  console.log('Received message: ' + message);
-  console.log('From space: ' + spaceId);
-
-  // Parse the message format: COMMAND|param1|param2|...
-  const parts = message.split('|').map(p => p.trim());
-  const command = parts[0].toUpperCase();
-
-  switch (command) {
-    case 'REQUEST_LABELS':
-      return handleRequestLabels(spaceId, parts[1]);
-
-    case 'APPLY_LABELS':
-      return handleApplyLabels(parts[1], parts[2]);
-
-    case 'RECOMMEND_LABEL':
-      return handleRecommendLabel(parts[1], parts[2]);
-
-    default:
-      return createTextResponse('Unknown command. Valid commands: REQUEST_LABELS, APPLY_LABELS, RECOMMEND_LABEL');
-  }
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({
+    status: 'ok',
+    message: 'Email Sorter API is running. Use POST requests to interact.',
+    commands: ['REQUEST_LABELS', 'APPLY_LABELS', 'RECOMMEND_LABEL']
+  })).setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
- * Handles a request for available labels.
- * @param {string} spaceId - The space to respond to
- * @param {string} emailId - The email ID this request is for
- * @returns {Object} Chat response with label list
+ * Handles POST requests from Google Flows.
+ * @param {Object} e - The HTTP request event
+ * @returns {Object} JSON response
  */
-function handleRequestLabels(spaceId, emailId) {
-  const labels = getUserLabels();
-  const labelList = labels.join(',');
-
-  const response = `LABELS_LIST|${emailId}|${labelList}`;
-
-  console.log('Responding with labels: ' + response);
-
-  return createTextResponse(response);
-}
-
-/**
- * Handles applying labels to an email.
- * @param {string} emailId - The Gmail message ID
- * @param {string} labelString - Comma-separated list of labels to apply
- * @returns {Object} Chat response confirming the action
- */
-function handleApplyLabels(emailId, labelString) {
-  if (!emailId || !labelString) {
-    return createTextResponse('ERROR|Missing emailId or labels');
-  }
-
-  const labelsToApply = labelString.split(',').map(l => l.trim()).filter(l => l.length > 0);
-
-  if (labelsToApply.length === 0 || (labelsToApply.length === 1 && labelsToApply[0].toUpperCase() === 'NONE')) {
-    return createTextResponse(`SUCCESS|${emailId}|No labels to apply`);
-  }
-
+function doPost(e) {
   try {
-    const thread = GmailApp.getMessageById(emailId).getThread();
+    const data = JSON.parse(e.postData.contents);
+    const command = data.command;
+    const emailId = data.emailId;
+    const labels = data.labels;
 
-    // Get all user labels and create a map for quick lookup
-    const allLabels = GmailApp.getUserLabels();
-    const labelMap = {};
-    allLabels.forEach(label => {
-      labelMap[label.getName().toLowerCase()] = label;
-    });
+    let result;
 
-    // Apply each label
-    const appliedLabels = [];
-    const notFoundLabels = [];
+    switch (command) {
+      case 'REQUEST_LABELS':
+        const labelList = getUserLabels();
+        result = { success: true, emailId: emailId, labels: labelList };
+        break;
 
-    labelsToApply.forEach(labelName => {
-      const label = labelMap[labelName.toLowerCase()];
-      if (label) {
-        thread.addLabel(label);
-        appliedLabels.push(labelName);
-      } else {
-        notFoundLabels.push(labelName);
-      }
-    });
+      case 'APPLY_LABELS':
+        if (!emailId || !labels || !Array.isArray(labels)) {
+          result = { success: false, error: 'Missing emailId or labels array' };
+        } else {
+          const applyResult = applyLabelsToEmail(emailId, labels);
+          result = { success: true, emailId: emailId, result: applyResult };
+        }
+        break;
 
-    let response = `SUCCESS|${emailId}|Applied: ${appliedLabels.join(', ')}`;
-    if (notFoundLabels.length > 0) {
-      response += `|Not found: ${notFoundLabels.join(', ')}`;
+      case 'RECOMMEND_LABEL':
+        const labelName = data.labelName;
+        const reason = data.reason;
+        postLabelRecommendation(labelName, reason);
+        result = { success: true, message: 'Recommendation posted' };
+        break;
+
+      default:
+        result = { success: false, error: 'Unknown command. Valid: REQUEST_LABELS, APPLY_LABELS, RECOMMEND_LABEL' };
     }
 
-    console.log(response);
-    return createTextResponse(response);
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
 
   } catch (error) {
-    console.error('Error applying labels: ' + error.message);
-    return createTextResponse(`ERROR|${emailId}|${error.message}`);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.message
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
 /**
- * Handles a label recommendation by posting it to the instructions space.
+ * Posts a label recommendation to the instructions channel.
  * @param {string} labelName - The suggested label name
- * @param {string} reason - The reason for the suggestion
- * @returns {Object} Chat response confirming the recommendation was logged
+ * @param {string} reason - Why this label is suggested
  */
-function handleRecommendLabel(labelName, reason) {
-  const props = PropertiesService.getScriptProperties();
-  const instructionsSpaceId = props.getProperty(CONFIG.PROPS.INSTRUCTIONS_SPACE_ID);
-
-  if (!instructionsSpaceId) {
-    return createTextResponse('ERROR|Instructions space not configured. Run onboardingSetup() first.');
+function postLabelRecommendation(labelName, reason) {
+  if (!WEBHOOK_URLS.INSTRUCTIONS) {
+    console.error('Instructions webhook not configured');
+    return;
   }
 
-  const recommendation = `
-*Label Recommendation*
+  const message = `*Label Recommendation*
 
 Suggested Label: \`${labelName}\`
 Reason: ${reason || 'No reason provided'}
 
-To create this label:
-1. Go to Gmail
-2. Click "More" in the left sidebar
+To create this label in Gmail:
+1. Open Gmail
+2. In the left sidebar, click "More"
 3. Click "Create new label"
 4. Enter: ${labelName}
-`;
+5. Click Create
 
-  sendChatMessage(instructionsSpaceId, recommendation);
+Then re-run postSetupInstructions() to update the AI prompt with the new label.`;
 
-  return createTextResponse(`RECOMMENDATION_LOGGED|${labelName}`);
-}
-
-/**
- * Creates a simple text response for Chat.
- * @param {string} text - The text to respond with
- * @returns {Object} Chat response object
- */
-function createTextResponse(text) {
-  return {
-    text: text
-  };
-}
-
-/**
- * Sends a message to a Chat space.
- * @param {string} spaceId - The space to send to
- * @param {string} text - The message text
- */
-function sendChatMessage(spaceId, text) {
-  try {
-    Chat.Spaces.Messages.create(
-      { text: text },
-      spaceId
-    );
-  } catch (error) {
-    console.error('Error sending Chat message: ' + error.message);
-  }
+  sendWebhookMessage(WEBHOOK_URLS.INSTRUCTIONS, message);
 }
 
 // ============================================================================
@@ -418,6 +441,51 @@ function getUserLabels() {
 }
 
 /**
+ * Applies labels to an email.
+ * @param {string} emailId - The Gmail message ID
+ * @param {string[]} labels - Array of label names to apply
+ * @returns {Object} Result with applied and notFound arrays
+ */
+function applyLabelsToEmail(emailId, labels) {
+  const message = GmailApp.getMessageById(emailId);
+  if (!message) {
+    throw new Error('Email not found: ' + emailId);
+  }
+
+  const thread = message.getThread();
+  const allLabels = GmailApp.getUserLabels();
+  const labelMap = {};
+
+  allLabels.forEach(label => {
+    labelMap[label.getName().toLowerCase()] = label;
+  });
+
+  const applied = [];
+  const notFound = [];
+
+  labels.forEach(labelName => {
+    if (!labelName || labelName.toUpperCase() === 'NONE') {
+      return; // Skip empty or NONE
+    }
+
+    const label = labelMap[labelName.toLowerCase()];
+    if (label) {
+      thread.addLabel(label);
+      applied.push(labelName);
+    } else {
+      notFound.push(labelName);
+    }
+  });
+
+  console.log(`Applied labels to ${emailId}: ${applied.join(', ')}`);
+  if (notFound.length > 0) {
+    console.log(`Labels not found: ${notFound.join(', ')}`);
+  }
+
+  return { applied: applied, notFound: notFound };
+}
+
+/**
  * Lists all available labels - useful for debugging.
  */
 function listAllLabels() {
@@ -432,15 +500,13 @@ function listAllLabels() {
 // ============================================================================
 
 /**
- * Processes all unread emails by sending them to the Flow one at a time.
+ * Processes all unread emails by sending them to the automated Chat space.
+ * Google Flow should be listening for PROCESS_EMAIL messages.
  * This is a one-time cleanup function with rate limiting.
  */
 function processUnreadEmails() {
-  const props = PropertiesService.getScriptProperties();
-  const automatedSpaceId = props.getProperty(CONFIG.PROPS.AUTOMATED_SPACE_ID);
-
-  if (!automatedSpaceId) {
-    console.error('Automated space not configured. Run onboardingSetup() first.');
+  if (!WEBHOOK_URLS.AUTOMATED) {
+    console.error('ERROR: Automated webhook URL not configured. Run configureWebhooks() first.');
     return;
   }
 
@@ -453,17 +519,21 @@ function processUnreadEmails() {
 
   if (threads.length === 0) {
     console.log('No unread emails to process.');
-    postStatusUpdate('No unread emails found to process.');
+    sendWebhookMessage(WEBHOOK_URLS.INSTRUCTIONS, '*Status Update*\n\nNo unread emails found to process.');
     return;
   }
 
   // Initialize processing state
+  const props = PropertiesService.getScriptProperties();
   const state = {
     totalThreads: threads.length,
     processed: 0,
     errors: []
   };
   props.setProperty(CONFIG.PROPS.PROCESSING_STATE, JSON.stringify(state));
+
+  // Notify start
+  sendWebhookMessage(WEBHOOK_URLS.INSTRUCTIONS, `*Status Update*\n\nStarting to process ${threads.length} unread email threads...`);
 
   // Process each thread
   threads.forEach((thread, index) => {
@@ -474,9 +544,9 @@ function processUnreadEmails() {
 
       console.log(`Processing ${index + 1}/${threads.length}: ${emailId}`);
 
-      // Send message to Flow to process this email
+      // Send message to automated channel for Flow to process
       const message = `PROCESS_EMAIL|${emailId}`;
-      sendChatMessage(automatedSpaceId, message);
+      sendWebhookMessage(WEBHOOK_URLS.AUTOMATED, message);
 
       state.processed++;
       props.setProperty(CONFIG.PROPS.PROCESSING_STATE, JSON.stringify(state));
@@ -494,30 +564,26 @@ function processUnreadEmails() {
   });
 
   // Processing complete
-  const summary = `
-Unread Email Processing Complete!
+  const summary = `*Unread Email Processing Complete!*
 
 Total threads: ${state.totalThreads}
 Successfully sent: ${state.processed}
 Errors: ${state.errors.length}
-${state.errors.length > 0 ? '\nError details:\n' + state.errors.map(e => `- ${e.threadId}: ${e.error}`).join('\n') : ''}
-`;
+${state.errors.length > 0 ? '\nError details:\n' + state.errors.map(e => '- ' + e.threadId + ': ' + e.error).join('\n') : ''}`;
 
   console.log(summary);
-  postStatusUpdate(summary);
+  sendWebhookMessage(WEBHOOK_URLS.INSTRUCTIONS, summary);
 
   // Clear processing data after successful completion
   clearProcessingData();
 }
 
 /**
- * Clears all processing state data. Run this if you need to restart processing
- * or if there was an error and you want to try again.
+ * Clears all processing state data. Run this if you need to restart processing.
  */
 function clearProcessingData() {
   const props = PropertiesService.getScriptProperties();
   props.deleteProperty(CONFIG.PROPS.PROCESSING_STATE);
-  props.deleteProperty(CONFIG.PROPS.PROCESSED_EMAIL_IDS);
   console.log('Processing data cleared. You can now run processUnreadEmails() again.');
 }
 
@@ -538,95 +604,6 @@ function getProcessingState() {
   }
 }
 
-/**
- * Posts a status update to the instructions space.
- * @param {string} message - The status message
- */
-function postStatusUpdate(message) {
-  const props = PropertiesService.getScriptProperties();
-  const instructionsSpaceId = props.getProperty(CONFIG.PROPS.INSTRUCTIONS_SPACE_ID);
-
-  if (instructionsSpaceId) {
-    sendChatMessage(instructionsSpaceId, `*Status Update*\n\n${message}`);
-  }
-}
-
-// ============================================================================
-// WEBHOOK HANDLER (Alternative to Chat App)
-// ============================================================================
-
-/**
- * If you prefer to use webhooks instead of a Chat app, deploy this as a web app
- * and configure your Flow to POST to the web app URL.
- *
- * @param {Object} e - The HTTP request event
- * @returns {Object} JSON response
- */
-function doPost(e) {
-  try {
-    const data = JSON.parse(e.postData.contents);
-    const command = data.command;
-    const emailId = data.emailId;
-    const labels = data.labels;
-
-    let result;
-
-    switch (command) {
-      case 'REQUEST_LABELS':
-        const labelList = getUserLabels();
-        result = { success: true, emailId: emailId, labels: labelList };
-        break;
-
-      case 'APPLY_LABELS':
-        const applyResult = applyLabelsToEmail(emailId, labels);
-        result = { success: true, emailId: emailId, result: applyResult };
-        break;
-
-      default:
-        result = { success: false, error: 'Unknown command' };
-    }
-
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
-
-  } catch (error) {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      error: error.message
-    })).setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-/**
- * Helper function for webhook to apply labels.
- * @param {string} emailId - The email ID
- * @param {string[]} labels - Array of label names
- * @returns {Object} Result object
- */
-function applyLabelsToEmail(emailId, labels) {
-  const thread = GmailApp.getMessageById(emailId).getThread();
-  const allLabels = GmailApp.getUserLabels();
-  const labelMap = {};
-  allLabels.forEach(label => {
-    labelMap[label.getName().toLowerCase()] = label;
-  });
-
-  const applied = [];
-  const notFound = [];
-
-  labels.forEach(labelName => {
-    const label = labelMap[labelName.toLowerCase()];
-    if (label) {
-      thread.addLabel(label);
-      applied.push(labelName);
-    } else {
-      notFound.push(labelName);
-    }
-  });
-
-  return { applied: applied, notFound: notFound };
-}
-
 // ============================================================================
 // UTILITY & DEBUG FUNCTIONS
 // ============================================================================
@@ -635,18 +612,20 @@ function applyLabelsToEmail(emailId, labels) {
  * Displays the current configuration - useful for debugging.
  */
 function showConfiguration() {
-  const props = PropertiesService.getScriptProperties();
-
   console.log('=== Email Sorter Configuration ===');
+  console.log('');
+  console.log('Webhooks:');
+  console.log('- Automated: ' + (WEBHOOK_URLS.AUTOMATED ? 'CONFIGURED' : 'NOT SET'));
+  console.log('- Instructions: ' + (WEBHOOK_URLS.INSTRUCTIONS ? 'CONFIGURED' : 'NOT SET'));
   console.log('');
   console.log('Rate Limit: ' + CONFIG.RATE_LIMIT_MS + 'ms');
   console.log('Batch Size: ' + CONFIG.BATCH_SIZE);
   console.log('');
-  console.log('Automated Space ID: ' + (props.getProperty(CONFIG.PROPS.AUTOMATED_SPACE_ID) || 'Not configured'));
-  console.log('Instructions Space ID: ' + (props.getProperty(CONFIG.PROPS.INSTRUCTIONS_SPACE_ID) || 'Not configured'));
-  console.log('');
   console.log('Excluded System Labels:');
   CONFIG.SYSTEM_LABELS.forEach(label => console.log('  - ' + label));
+  console.log('');
+  console.log('User Labels (' + getUserLabels().length + '):');
+  getUserLabels().forEach(label => console.log('  - ' + label));
 }
 
 /**
@@ -669,23 +648,6 @@ function testGmailAccess() {
 }
 
 /**
- * Test function to verify Chat API access.
- */
-function testChatAccess() {
-  try {
-    // Try to list spaces to verify Chat API access
-    const spaces = Chat.Spaces.list();
-    console.log('Chat API access: OK');
-    console.log('Spaces found: ' + (spaces.spaces ? spaces.spaces.length : 0));
-    return true;
-  } catch (error) {
-    console.error('Chat API access error: ' + error.message);
-    console.log('Make sure to enable the Chat API in Advanced Google Services');
-    return false;
-  }
-}
-
-/**
  * Runs all tests to verify the setup.
  */
 function runAllTests() {
@@ -693,25 +655,36 @@ function runAllTests() {
   console.log('');
 
   const gmailOk = testGmailAccess();
-  const chatOk = testChatAccess();
+  console.log('');
+
+  const webhooksConfigured = WEBHOOK_URLS.AUTOMATED && WEBHOOK_URLS.INSTRUCTIONS;
+  let webhooksOk = false;
+
+  if (webhooksConfigured) {
+    webhooksOk = testWebhooks();
+  } else {
+    console.log('Webhooks: NOT CONFIGURED - run configureWebhooks() first');
+  }
 
   console.log('');
   console.log('=== Test Results ===');
   console.log('Gmail: ' + (gmailOk ? 'PASS' : 'FAIL'));
-  console.log('Chat: ' + (chatOk ? 'PASS' : 'FAIL'));
+  console.log('Webhooks: ' + (webhooksOk ? 'PASS' : (webhooksConfigured ? 'FAIL' : 'NOT CONFIGURED')));
 
-  if (gmailOk && chatOk) {
+  if (gmailOk && webhooksOk) {
     console.log('');
-    console.log('All tests passed! You can now run onboardingSetup()');
+    console.log('All tests passed! You can now:');
+    console.log('1. Run postSetupInstructions() to post the Flow setup guide');
+    console.log('2. Deploy as web app for the Flow to call');
   }
 }
 
 /**
  * Resets everything - clears all stored properties.
- * WARNING: This will require you to run onboardingSetup() again.
  */
 function factoryReset() {
   const props = PropertiesService.getScriptProperties();
   props.deleteAllProperties();
-  console.log('All properties cleared. Run onboardingSetup() to reconfigure.');
+  console.log('All properties cleared.');
+  console.log('Remember: You still need to update WEBHOOK_URLS in the code.');
 }
