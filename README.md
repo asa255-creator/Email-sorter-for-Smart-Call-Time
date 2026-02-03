@@ -9,33 +9,99 @@ A Google Workspace integration platform for Google Flows. Automatically sort ema
 - Batch processing of existing unread emails via queue
 - Labels synced to spreadsheet for easy Flow access
 
-## Installation
+---
 
-### Prerequisites
+## Step-by-Step Installation
 
-Install clasp (Google's Apps Script CLI):
+### Step 1: Install Homebrew (Mac only, skip if already installed)
+
+Open Terminal and run:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Follow the prompts. When done, close and reopen Terminal.
+
+### Step 2: Install Node.js
+
+**Mac:**
+```bash
+brew install node
+```
+
+**Windows:**
+Download and install from https://nodejs.org/
+
+**Verify installation:**
+```bash
+node --version
+npm --version
+```
+
+### Step 3: Install clasp (Google Apps Script CLI)
 
 ```bash
 npm install -g @google/clasp
-clasp login
 ```
 
-### Deploy
+### Step 4: Clone this repository
 
 ```bash
 git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git
 cd Email-sorter-for-Smart-Call-Time
+```
+
+### Step 5: Run the setup script
+
+```bash
 ./setup.sh
 ```
 
-This creates a Google Sheet with all the code attached and opens it in your browser.
+The script will:
+1. Ask you to log in to your Google account (choose which account to use)
+2. Create a new Google Sheet with all the code attached
+3. Open the Sheet in your browser
 
-### After Deployment
+### Step 6: Initialize the Email Sorter
 
-1. Refresh the spreadsheet
+1. **Refresh** the spreadsheet in your browser
 2. Click **Smart Call Time > Email Sorter > Setup**
-3. Deploy as web app: **Deploy > New deployment > Web app**
-4. Configure your Google Flows using the Instructions sheet
+3. Grant the required permissions when prompted
+
+### Step 7: Deploy as Web App
+
+1. In the spreadsheet, go to **Extensions > Apps Script**
+2. Click **Deploy > New deployment**
+3. Select type: **Web app**
+4. Execute as: **Me**
+5. Who has access: **Anyone**
+6. Click **Deploy** and copy the URL
+
+### Step 8: Configure Google Flows
+
+See the **Instructions** sheet in your spreadsheet for:
+- How to set up Flows for new emails
+- How to set up Flows for batch processing
+- AI prompt templates
+
+---
+
+## Switching Google Accounts
+
+To deploy to a different Google account:
+
+```bash
+./setup.sh --switch-account
+```
+
+Or manually:
+```bash
+clasp logout
+clasp login
+```
+
+---
 
 ## Project Structure
 
@@ -52,6 +118,8 @@ src/
 appsscript.json         # Apps Script manifest
 setup.sh                # Deployment script
 ```
+
+---
 
 ## How It Works
 
@@ -74,6 +142,8 @@ setup.sh                # Deployment script
 3. Flow writes labels to "Labels to Apply" column
 4. Script auto-applies labels
 
+---
+
 ## Sheets Created
 
 | Sheet | Purpose |
@@ -84,7 +154,9 @@ setup.sh                # Deployment script
 | **Config** | Settings (hidden) |
 | **Log** | Processing history |
 
-## API
+---
+
+## API Reference
 
 ### POST: APPLY_LABELS
 ```json
@@ -106,6 +178,8 @@ setup.sh                # Deployment script
 {"command": "SYNC_LABELS"}
 ```
 
+---
+
 ## Menu Options
 
 | Menu | Action |
@@ -116,6 +190,8 @@ setup.sh                # Deployment script
 | Email Sorter > Process All Pending | Process queued items |
 | Email Sorter > Clear Queue | Clear the queue |
 
+---
+
 ## Development
 
 ```bash
@@ -125,13 +201,23 @@ clasp pull          # Pull changes from Apps Script
 clasp open          # Open in browser
 ```
 
-## Multi-User
+---
 
-Each user runs their own deployment:
-1. Clone repo
-2. Run `./setup.sh`
-3. Deploy their own web app
-4. Configure their own Flows
+## Troubleshooting
+
+### "command not found: npm"
+You need to install Node.js first. See Step 2.
+
+### "command not found: clasp"
+Run: `npm install -g @google/clasp`
+
+### Menu not appearing in spreadsheet
+Refresh the page and wait a few seconds.
+
+### Permission denied running setup.sh
+Run: `chmod +x setup.sh` then try again.
+
+---
 
 ## License
 
