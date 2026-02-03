@@ -165,18 +165,12 @@ function createInstructionsSheet(ss) {
 
   sheet.clear();
 
-  // Get web app URL
-  let webAppUrl = '[Deploy as web app first]';
-  try {
-    webAppUrl = ScriptApp.getService().getUrl() || webAppUrl;
-  } catch (e) {}
-
   // Get labels for prompt
   const labels = getGmailLabels();
   const labelList = labels.map(l => l.name).join(', ');
 
   // Build instructions
-  const content = buildInstructionsContent(webAppUrl, labelList);
+  const content = buildInstructionsContent(labelList);
 
   // Write content
   sheet.getRange(1, 1, content.length, 1).setValues(content);
@@ -199,55 +193,63 @@ function createInstructionsSheet(ss) {
 
 /**
  * Builds the instructions content array.
- * @param {string} webAppUrl - The web app URL
  * @param {string} labelList - Comma-separated label names
  * @returns {Array} Array of instruction rows
  */
-function buildInstructionsContent(webAppUrl, labelList) {
+function buildInstructionsContent(labelList) {
   return [
     ['SMART CALL TIME - EMAIL SORTER SETUP'],
     [''],
     ['This sheet-based system lets Google Flows automatically sort your emails into labels.'],
+    ['Google Flows reads and writes directly to this spreadsheet - no webhooks or APIs needed.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
-    ['STEP 1: DEPLOY AS WEB APP'],
+    ['HOW IT WORKS'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['1. Go to Deploy > New deployment'],
-    ['2. Click "Select type" > Web app'],
-    ['3. Execute as: Me (your email)'],
-    ['4. Who has access: Anyone'],
-    ['5. Click Deploy and authorize'],
-    [''],
-    ['YOUR WEB APP URL:'],
-    [webAppUrl],
+    ['1. Labels sheet: Contains all your Gmail labels (synced from Gmail)'],
+    ['2. Queue sheet: Where emails are processed'],
+    ['3. Google Flow reads Labels sheet and writes to Queue sheet'],
+    ['4. Script automatically applies labels when Queue is updated'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
-    ['STEP 2: GOOGLE FLOW FOR NEW EMAILS'],
+    ['GOOGLE FLOW FOR NEW EMAILS'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
     ['Trigger: When a new email arrives in Gmail'],
     [''],
     ['Actions:'],
-    ['1. Read the "Labels" sheet from this spreadsheet to get available labels'],
+    ['1. Read the "Labels" sheet to get available label names'],
     ['2. Use AI to select appropriate labels (see prompt below)'],
-    ['3. POST to web app to apply labels:'],
-    ['   URL: ' + webAppUrl],
-    ['   Body: {"command":"APPLY_LABELS","emailId":"{id}","labels":["Label1","Label2"]}'],
+    ['3. Add a row to the "Queue" sheet with:'],
+    ['   - Email ID (from Gmail trigger)'],
+    ['   - Subject'],
+    ['   - From'],
+    ['   - Date'],
+    ['   - Labels to Apply (comma-separated labels from AI)'],
+    ['   - Status: "Pending"'],
+    [''],
+    ['The script will automatically apply labels when the row is added.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
-    ['STEP 3: GOOGLE FLOW FOR OLD EMAILS (QUEUE)'],
+    ['GOOGLE FLOW FOR OLD EMAILS (QUEUE PROCESSING)'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['Trigger: When a row is added/modified in "Queue" sheet'],
-    ['Filter: Status column = "Pending"'],
+    ['To process existing unread emails:'],
     [''],
-    ['Actions:'],
-    ['1. Get Email ID from the row'],
-    ['2. Use Gmail connector to fetch email details'],
-    ['3. Use AI to select labels'],
-    ['4. Update the row: Set "Labels to Apply" column with comma-separated labels'],
-    ['   (The script will automatically apply labels when you update this column)'],
+    ['1. Run: Menu > Smart Call Time > Email Sorter > Queue Unread Emails'],
+    ['   This adds unread emails to the Queue sheet with Status = "Pending"'],
+    [''],
+    ['2. Create a Flow triggered when Queue sheet rows are modified'],
+    ['   Filter: Status column = "Pending" AND "Labels to Apply" is empty'],
+    [''],
+    ['3. Flow actions:'],
+    ['   - Get the Email ID from the row'],
+    ['   - Use Gmail connector to fetch email details (subject, body, sender)'],
+    ['   - Use AI to select labels'],
+    ['   - Update the row: Set "Labels to Apply" column with comma-separated labels'],
+    [''],
+    ['4. The script automatically applies labels when you update the column'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
     ['AI PROMPT FOR LABEL SELECTION'],
@@ -276,30 +278,17 @@ function buildInstructionsContent(webAppUrl, labelList) {
     ['--- COPY TO HERE ---'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
-    ['API REFERENCE'],
+    ['SHEET REFERENCE'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['GET ' + webAppUrl],
-    ['  Returns current labels and API status'],
+    ['LABELS SHEET - Your Gmail labels'],
+    ['  Columns: Label Name, Label ID, Nested Path, Type, Last Updated'],
+    ['  Use "Label Name" column in your Flow'],
     [''],
-    ['POST ' + webAppUrl],
-    ['  Command: GET_LABELS'],
-    ['  Body: {"command":"GET_LABELS"}'],
-    ['  Returns: {"success":true,"labels":[{"name":"Work","id":"..."},...]}}'],
-    [''],
-    ['POST ' + webAppUrl],
-    ['  Command: APPLY_LABELS'],
-    ['  Body: {"command":"APPLY_LABELS","emailId":"abc123","labels":["Work","Personal"]}'],
-    ['  Returns: {"success":true,"applied":["Work","Personal"],"notFound":[]}'],
-    [''],
-    ['═══════════════════════════════════════════════════════════════'],
-    ['PROCESSING OLD EMAILS'],
-    ['═══════════════════════════════════════════════════════════════'],
-    [''],
-    ['1. Menu: Smart Call Time > Email Sorter > Queue Unread Emails'],
-    ['2. This adds unread emails to the Queue sheet with Status = Pending'],
-    ['3. Your Google Flow processes each row and fills "Labels to Apply"'],
-    ['4. Labels are automatically applied when the column is updated'],
+    ['QUEUE SHEET - Email processing queue'],
+    ['  Columns: Email ID, Subject, From, Date, Labels to Apply, Status, Processed At'],
+    ['  Status values: Pending → Processing → Complete/Error/Skipped'],
+    ['  Flow writes to "Labels to Apply" column (comma-separated label names)'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
     ['SYNCING LABELS'],
