@@ -46,47 +46,26 @@ function onOpen() {
 // ============================================================================
 
 /**
- * Installable edit trigger - processes queue when Flow updates labels.
- * Must be installed via setupTriggers().
- */
-function onEditTrigger(e) {
-  if (!e || !e.source) return;
-
-  const sheet = e.source.getActiveSheet();
-  const sheetName = sheet.getName();
-
-  // Route to appropriate handler based on sheet
-  switch (sheetName) {
-    case 'Queue':
-      processQueueRow(e.range.getRow());
-      break;
-    // Future: Add handlers for other sheets
-    // case 'DocumentQueue':
-    //   processDocumentQueueRow(e.range.getRow());
-    //   break;
-  }
-}
-
-/**
  * Sets up all installable triggers for the application.
+ * Creates a 15-minute time-based trigger to check the queue.
  */
 function setupTriggers() {
-  // Remove existing triggers
+  // Remove existing triggers for our functions
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(trigger => {
     const handlerName = trigger.getHandlerFunction();
-    if (handlerName === 'onEditTrigger') {
+    if (handlerName === 'onEditTrigger' || handlerName === 'checkQueueForProcessing') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
 
-  // Create edit trigger
-  ScriptApp.newTrigger('onEditTrigger')
-    .forSpreadsheet(SpreadsheetApp.getActive())
-    .onEdit()
+  // Create 15-minute time-based trigger for queue checking
+  ScriptApp.newTrigger('checkQueueForProcessing')
+    .timeBased()
+    .everyMinutes(15)
     .create();
 
-  logAction('SYSTEM', 'SETUP', 'Triggers installed');
+  logAction('SYSTEM', 'SETUP', 'Time-based trigger installed (every 15 min)');
 }
 
 // ============================================================================
