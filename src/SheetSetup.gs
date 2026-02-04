@@ -32,7 +32,6 @@ function createConfigSheet(ss) {
 
   // Default configuration with descriptions
   const config = [
-    ['inbound_method', 'direct_sheet_edit', 'direct_sheet_edit: Flow writes labels directly to Queue sheet. chat_webhook_listener: (Future) Labels received via webhook from Chat listener program.'],
     ['chat_webhook_url', 'https://chat.googleapis.com/v1/spaces/AAQAULujEoo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=O3mPCLnQbJzrWcN-qrZGqWBlTiAJbBukWCffMZh1VuQ', 'Webhook URL for outbound notifications to Google Chat. Script posts here to notify Flow.'],
     ['instance_name', '', 'Unique identifier for this instance. Appears at start of Chat messages. Flow filters on this. Example: Johns_Sorter'],
     ['rate_limit_ms', '3000', 'Milliseconds to wait between processing emails in batch mode.'],
@@ -43,12 +42,6 @@ function createConfigSheet(ss) {
   ];
 
   sheet.getRange(2, 1, config.length, 3).setValues(config);
-
-  // Add dropdown validation for inbound_method
-  const inboundMethodRule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['direct_sheet_edit', 'chat_webhook_listener'], true)
-    .build();
-  sheet.getRange('B2').setDataValidation(inboundMethodRule);
 
   // Format columns
   sheet.setColumnWidth(1, 150);
