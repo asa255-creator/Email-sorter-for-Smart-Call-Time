@@ -13,6 +13,12 @@ echo ""
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 SRC_DIR="$SCRIPT_DIR/src"
 
+# Always pull latest code from GitHub
+echo "Pulling latest code from GitHub..."
+cd "$SCRIPT_DIR"
+git pull origin main 2>/dev/null || git pull 2>/dev/null || echo "Warning: Could not pull latest code. Continuing with local version."
+echo ""
+
 # Validate we're in the right place
 if [ ! -d "$SRC_DIR" ]; then
     echo "ERROR: Cannot find src/ directory."
