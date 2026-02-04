@@ -9,6 +9,44 @@ echo "  Smart Call Time - Setup Script"
 echo "============================================"
 echo ""
 
+# Get the directory where this script lives (the repo root)
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SRC_DIR="$SCRIPT_DIR/src"
+
+# Validate we're in the right place
+if [ ! -d "$SRC_DIR" ]; then
+    echo "ERROR: Cannot find src/ directory."
+    echo "Make sure you're running this from the repo root."
+    exit 1
+fi
+
+if [ ! -f "$SRC_DIR/appsscript.json" ]; then
+    echo "ERROR: Cannot find src/appsscript.json"
+    echo "The repository structure appears corrupted."
+    exit 1
+fi
+
+# Check for nested clone (common mistake)
+if [ -d "$SCRIPT_DIR/Email-sorter-for-Smart-Call-Time" ]; then
+    echo "ERROR: Found nested clone of repository!"
+    echo ""
+    echo "You have 'Email-sorter-for-Smart-Call-Time/' inside your repo."
+    echo "This causes duplicate files. Delete it with:"
+    echo ""
+    echo "  rm -rf \"$SCRIPT_DIR/Email-sorter-for-Smart-Call-Time\""
+    echo ""
+    exit 1
+fi
+
+# Clean up any stray .clasp.json in root (should only be in src/)
+if [ -f "$SCRIPT_DIR/.clasp.json" ]; then
+    echo "Removing stray .clasp.json from root directory..."
+    rm -f "$SCRIPT_DIR/.clasp.json"
+fi
+
+# Fix Node v25 memory bug
+export NODE_OPTIONS="--max-old-space-size=4096"
+
 # Handle --switch-account flag
 if [ "$1" == "--switch-account" ]; then
     echo "Switching Google account..."
@@ -25,8 +63,8 @@ if ! command -v npm &> /dev/null; then
     echo ""
     echo "Please install Node.js first:"
     echo ""
-    echo "  Mac:     brew install node"
-    echo "  Windows: Download from https://nodejs.org/"
+    echo "  Mac:     brew install node@20"
+    echo "  Windows: Download LTS from https://nodejs.org/"
     echo ""
     exit 1
 fi
@@ -63,14 +101,28 @@ case $choice in
         echo "Creating new Google Sheets project..."
         echo ""
 
-        cd src
-
         # Remove existing .clasp.json if present
-        rm -f .clasp.json
+        rm -f "$SRC_DIR/.clasp.json"
 
-        # Capture clasp create output to get URLs
-        CREATE_OUTPUT=$(clasp create --type sheets --title "Smart Call Time - Flow Integrator" 2>&1)
-        echo "$CREATE_OUTPUT"
+        # Change to src directory
+        cd "$SRC_DIR"
+
+        # Create new project
+        clasp create --type sheets --title "Smart Call Time - Flow Integrator"
+
+        # Verify .clasp.json was created and fix rootDir if needed
+        if [ -f ".clasp.json" ]; then
+            # Extract scriptId and recreate with correct rootDir
+            SCRIPT_ID=$(grep -o '"scriptId"[[:space:]]*:[[:space:]]*"[^"]*"' .clasp.json | cut -d'"' -f4)
+            if [ -n "$SCRIPT_ID" ]; then
+                cat > .clasp.json << EOF
+{
+  "scriptId": "$SCRIPT_ID",
+  "rootDir": "."
+}
+EOF
+            fi
+        fi
 
         echo ""
         echo "Pushing code to Google..."
@@ -83,11 +135,10 @@ case $choice in
         echo ""
         echo "Next steps:"
         echo ""
-        echo "  1. Find the Google Sheets URL in the output above"
-        echo "  2. Open that URL in your browser"
-        echo "  3. REFRESH the page"
-        echo "  4. Click: Smart Call Time > Email Sorter > Setup"
-        echo "  5. Grant permissions when prompted"
+        echo "  1. Open the Google Sheets URL shown above"
+        echo "  2. REFRESH the page"
+        echo "  3. Click: Smart Call Time > Email Sorter > Setup"
+        echo "  4. Grant permissions when prompted"
         echo ""
         ;;
 
@@ -100,15 +151,15 @@ case $choice in
             exit 1
         fi
 
-        # Create .clasp.json in src directory
-        cat > src/.clasp.json << EOF
+        # Create .clasp.json in src directory with correct rootDir
+        cat > "$SRC_DIR/.clasp.json" << EOF
 {
   "scriptId": "$script_id",
   "rootDir": "."
 }
 EOF
 
-        cd src
+        cd "$SRC_DIR"
         echo "Pushing code..."
         clasp push
 
