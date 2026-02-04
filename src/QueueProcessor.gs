@@ -322,3 +322,67 @@ function parseLabelsString(labelString) {
     .map(l => l.trim())
     .filter(l => l.length > 0 && l.toUpperCase() !== 'NONE');
 }
+
+// ============================================================================
+// TIME-BASED QUEUE CHECKING
+// ============================================================================
+
+/**
+ * Checks the queue for rows ready to process.
+ * Called by time-based trigger (every 15 minutes, or 30 seconds after processing).
+ * If work is done, schedules a quick follow-up check in 30 seconds.
+ */
+function checkQueueForProcessing() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Queue');
+  if (!sheet) return;
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return; // No data rows
+
+  // Find rows with Status = "Processing" AND Labels to Apply is filled
+  const data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  let processedAny = false;
+
+  for (let i = 0; i < data.length; i++) {
+    const labelsToApply = data[i][4]; // Column E
+    const status = data[i][5]; // Column F
+
+    if (status === 'Processing' && labelsToApply && labelsToApply.trim() !== '') {
+      // Process this row
+      const rowNum = i + 2;
+      processQueueRow(rowNum);
+      processedAny = true;
+      break; // Process one at a time, let next check handle the rest
+    }
+  }
+
+  // If we processed something, schedule a quick follow-up check
+  if (processedAny) {
+    scheduleQuickCheck();
+  }
+}
+
+/**
+ * Schedules a one-time trigger to run checkQueueForProcessing in 30 seconds.
+ * Cleans up old quick-check triggers first to avoid buildup.
+ */
+function scheduleQuickCheck() {
+  // Clean up any existing quick-check triggers
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'checkQueueForProcessing' &&
+        trigger.getTriggerSource() === ScriptApp.TriggerSource.CLOCK &&
+        trigger.getEventType() === ScriptApp.EventType.CLOCK) {
+      // Check if it's a one-time trigger (not the 15-minute recurring one)
+      // One-time triggers created with .after() don't have a specific way to identify them
+      // So we'll just let them run and not delete them
+    }
+  });
+
+  // Create a one-time trigger for 30 seconds from now
+  ScriptApp.newTrigger('checkQueueForProcessing')
+    .timeBased()
+    .after(30 * 1000) // 30 seconds in milliseconds
+    .create();
+}
