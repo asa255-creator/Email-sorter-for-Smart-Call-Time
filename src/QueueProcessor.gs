@@ -13,12 +13,12 @@
 // ============================================================================
 
 /**
- * Adds all unread emails to the Queue sheet for processing.
+ * Adds all unlabeled emails to the Queue sheet for processing.
  * First email gets Status = "Processing", rest get "Pending".
  * Context column filled with full email content for Flow/AI to read.
- * Called via menu: Smart Call Time > Email Sorter > Queue Unread Emails
+ * Called via menu: Smart Call Time > Email Sorter > Queue Unlabeled Emails
  */
-function queueUnreadEmails() {
+function queueUnlabeledEmails() {
   const ss = SpreadsheetApp.getActive();
   const ui = SpreadsheetApp.getUi();
   const sheet = ss.getSheetByName('Queue');
@@ -29,10 +29,11 @@ function queueUnreadEmails() {
   }
 
   const batchSize = parseInt(getConfigValue('batch_size') || '50');
-  const threads = GmailApp.search('is:unread', 0, batchSize);
+  // Search for emails without any user labels
+  const threads = GmailApp.search('has:nouserlabels', 0, batchSize);
 
   if (threads.length === 0) {
-    ui.alert('No Emails', 'No unread emails found to process.', ui.ButtonSet.OK);
+    ui.alert('No Emails', 'No unlabeled emails found to process.', ui.ButtonSet.OK);
     return;
   }
 

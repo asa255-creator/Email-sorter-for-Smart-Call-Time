@@ -137,7 +137,7 @@ setup.sh                # Deployment script
 5. Script applies labels and deletes the row
 
 ### Old Emails (Queue)
-1. Menu: **Queue Unread Emails** (adds emails with Context filled)
+1. Menu: **Queue Unlabeled Emails** (adds emails with Context filled)
 2. First row gets Status = "Processing"
 3. Flow triggers on "Processing" row, reads Context column
 4. Flow writes labels to "Labels to Apply" column
@@ -179,7 +179,7 @@ setup.sh                # Deployment script
 |------|--------|
 | Setup / Refresh | Initialize sheets and sync labels |
 | Sync Labels Now | Refresh Gmail labels |
-| Queue Unread Emails | Add old unread emails to queue |
+| Queue Unlabeled Emails | Add unlabeled emails to queue |
 | Process All Pending | Manually process queued items |
 | Clear Queue | Clear the queue |
 

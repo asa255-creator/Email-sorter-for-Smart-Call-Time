@@ -9,7 +9,6 @@
  * - SheetSetup.gs: Sheet creation and initialization
  * - LabelManager.gs: Gmail label operations
  * - QueueProcessor.gs: Email queue processing
- * - ApiHandler.gs: Web app endpoints (doGet/doPost)
  * - ConfigManager.gs: Configuration management
  * - Logger.gs: Logging utilities
  */
@@ -31,19 +30,13 @@ function onOpen() {
       .addItem('Setup / Refresh', 'emailSorterSetup')
       .addSeparator()
       .addItem('Sync Labels Now', 'syncLabelsToSheet')
-      .addItem('Queue Unread Emails', 'queueUnreadEmails')
+      .addItem('Queue Unlabeled Emails', 'queueUnlabeledEmails')
       .addItem('Process All Pending', 'processAllPending')
       .addSeparator()
       .addItem('Clear Queue', 'clearQueue'))
-    // Future integrations can be added here
-    // .addSubMenu(ui.createMenu('Document Sorter')
-    //   .addItem('Setup', 'documentSorterSetup'))
-    // .addSubMenu(ui.createMenu('Alerts')
-    //   .addItem('Setup', 'alertsSetup'))
     .addSeparator()
     .addSubMenu(ui.createMenu('Settings')
       .addItem('Show Configuration', 'showConfig')
-      .addItem('View Web App URL', 'showWebAppUrl')
       .addItem('Refresh All', 'refreshAll'))
     .addToUi();
 }
@@ -134,8 +127,7 @@ function emailSorterSetup() {
   ui.alert('Setup Complete!',
     'Email Sorter is ready.\n\n' +
     '1. Review the Instructions sheet\n' +
-    '2. Deploy as web app: Deploy > New deployment\n' +
-    '3. Configure your Google Flows\n\n' +
+    '2. Configure your Google Flows\n\n' +
     'Labels have been synced to the Labels sheet.',
     ui.ButtonSet.OK);
 }
@@ -172,23 +164,3 @@ function showConfig() {
   ui.alert('Configuration', config, ui.ButtonSet.OK);
 }
 
-/**
- * Shows the web app URL if deployed.
- */
-function showWebAppUrl() {
-  const ui = SpreadsheetApp.getUi();
-
-  try {
-    const url = ScriptApp.getService().getUrl();
-    if (url) {
-      ui.alert('Web App URL', url, ui.ButtonSet.OK);
-    } else {
-      throw new Error('Not deployed');
-    }
-  } catch (e) {
-    ui.alert('Not Deployed',
-      'Deploy as web app first:\n' +
-      'Deploy > New deployment > Web app',
-      ui.ButtonSet.OK);
-  }
-}
