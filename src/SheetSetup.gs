@@ -238,7 +238,7 @@ function buildInstructionsContent() {
     ['FLOW FOR OLD EMAILS (QUEUE)'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['First: Run menu > Smart Call Time > Email Sorter > Queue Unread Emails'],
+    ['First: Run menu > Smart Call Time > Email Sorter > Queue Unlabeled Emails'],
     ['This adds old emails with full content in the Context column.'],
     [''],
     ['TRIGGER: When Queue sheet is modified'],
@@ -309,7 +309,7 @@ function buildInstructionsContent() {
     ['Smart Call Time > Email Sorter:'],
     ['  - Setup / Refresh: Re-run setup'],
     ['  - Sync Labels Now: Refresh labels from Gmail'],
-    ['  - Queue Unread Emails: Add old emails to queue'],
+    ['  - Queue Unlabeled Emails: Add old emails to queue'],
     ['  - Process All Pending: Manually apply labels'],
     ['  - Clear Queue: Remove all items'],
   ];

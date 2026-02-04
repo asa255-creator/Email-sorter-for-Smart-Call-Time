@@ -13,12 +13,12 @@
 // ============================================================================
 
 /**
- * Adds all unread emails to the Queue sheet for processing.
+ * Adds all unlabeled emails to the Queue sheet for processing.
  * First email gets Status = "Processing", rest get "Pending".
  * Context column filled with full email content for Flow/AI to read.
- * Called via menu: Smart Call Time > Email Sorter > Queue Unread Emails
+ * Called via menu: Smart Call Time > Email Sorter > Queue Unlabeled Emails
  */
-function queueUnreadEmails() {
+function queueUnlabeledEmails() {
   const ss = SpreadsheetApp.getActive();
   const ui = SpreadsheetApp.getUi();
   const sheet = ss.getSheetByName('Queue');
@@ -29,10 +29,11 @@ function queueUnreadEmails() {
   }
 
   const batchSize = parseInt(getConfigValue('batch_size') || '50');
-  const threads = GmailApp.search('is:unread', 0, batchSize);
+  // Search for emails without any user labels
+  const threads = GmailApp.search('has:nouserlabels', 0, batchSize);
 
   if (threads.length === 0) {
-    ui.alert('No Emails', 'No unread emails found to process.', ui.ButtonSet.OK);
+    ui.alert('No Emails', 'No unlabeled emails found to process.', ui.ButtonSet.OK);
     return;
   }
 
@@ -42,19 +43,15 @@ function queueUnreadEmails() {
   // Check if there's already a "Processing" row
   const hasProcessing = hasProcessingRow(sheet);
 
-  // Build new rows with full email context
+  // Build all rows with full context upfront
   const newRows = [];
   threads.forEach((thread, index) => {
     const message = thread.getMessages()[0];
     const emailId = message.getId();
 
     if (!existingIds.has(emailId)) {
-      // Build context: full email dump for AI
+      // Fetch full context for every email
       const context = buildEmailContext(message);
-
-      // First new row gets "Processing" if no existing Processing row
-      const isFirstNew = newRows.length === 0;
-      const status = (isFirstNew && !hasProcessing) ? 'Processing' : 'Pending';
 
       newRows.push([
         emailId,
@@ -62,12 +59,17 @@ function queueUnreadEmails() {
         message.getFrom(),
         message.getDate().toISOString(),
         '', // Labels to Apply - Flow fills this
-        status,
+        'Pending', // All start as Pending, we'll set first to Processing after
         '', // Processed At
-        context // Full email content
+        context
       ]);
     }
   });
+
+  // Set first row to Processing if no existing Processing row
+  if (newRows.length > 0 && !hasProcessing) {
+    newRows[0][5] = 'Processing';
+  }
 
   if (newRows.length === 0) {
     ui.alert('Already Queued',
@@ -214,6 +216,7 @@ function processQueueRow(rowNumber) {
 
 /**
  * Promotes the first "Pending" row to "Processing".
+ * Context is already populated - just change the status.
  * This triggers the Flow to process the next email.
  */
 function promoteNextPending() {
