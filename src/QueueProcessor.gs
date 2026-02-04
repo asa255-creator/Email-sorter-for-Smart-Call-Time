@@ -220,8 +220,8 @@ function processQueueRow(rowNumber) {
 
 /**
  * Promotes the first "Pending" row to "Processing".
- * Context is already populated - just change the status.
- * This triggers the Flow to process the next email.
+ * Only promotes if there are NO other Processing rows waiting for labels.
+ * This prevents over-promoting when new emails arrive via Flow.
  */
 function promoteNextPending() {
   const ss = SpreadsheetApp.getActive();
@@ -231,19 +231,41 @@ function promoteNextPending() {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return; // No data rows
 
-  // Find first Pending row (start from row 2)
-  const statuses = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+  // Check all statuses and labels
+  const data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
 
-  for (let i = 0; i < statuses.length; i++) {
-    if (statuses[i][0] === 'Pending') {
-      // Change to Processing
-      sheet.getRange(i + 2, 6).setValue('Processing');
-      logAction('SYSTEM', 'PROMOTE', `Row ${i + 2} promoted to Processing`);
+  // Count Processing rows that are waiting for labels (no labels filled yet)
+  let processingWaitingCount = 0;
+  let firstPendingIndex = -1;
 
-      // Send outbound notification to Google Chat
-      notifyOldEmailReady();
-      return;
+  for (let i = 0; i < data.length; i++) {
+    const labelsToApply = data[i][4]; // Column E
+    const status = data[i][5]; // Column F
+
+    if (status === 'Processing' && (!labelsToApply || labelsToApply.trim() === '')) {
+      processingWaitingCount++;
     }
+
+    if (status === 'Pending' && firstPendingIndex === -1) {
+      firstPendingIndex = i;
+    }
+  }
+
+  // Only promote if there are no Processing rows waiting for labels
+  // This prevents over-promoting when new emails arrive via real-time Flow
+  if (processingWaitingCount > 0) {
+    logAction('SYSTEM', 'PROMOTE_SKIP', `${processingWaitingCount} Processing row(s) still waiting for labels`);
+    return;
+  }
+
+  // Promote first Pending row
+  if (firstPendingIndex !== -1) {
+    sheet.getRange(firstPendingIndex + 2, 6).setValue('Processing');
+    logAction('SYSTEM', 'PROMOTE', `Row ${firstPendingIndex + 2} promoted to Processing`);
+
+    // Send outbound notification to Google Chat
+    notifyOldEmailReady();
+    return;
   }
 
   // No more Pending rows - queue is complete
@@ -338,7 +360,8 @@ function parseLabelsString(labelString) {
 /**
  * Checks the queue for rows ready to process.
  * Called by time-based trigger (every 15 minutes, or 30 seconds after processing).
- * If work is done, schedules a quick follow-up check in 30 seconds.
+ * Processes ALL rows that have Status="Processing" AND Labels filled.
+ * Handles both old email (batch) and new email (real-time) flows.
  */
 function checkQueueForProcessing() {
   const ss = SpreadsheetApp.getActive();
@@ -348,25 +371,38 @@ function checkQueueForProcessing() {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return; // No data rows
 
-  // Find rows with Status = "Processing" AND Labels to Apply is filled
+  // Find ALL rows with Status = "Processing" AND Labels to Apply is filled
   const data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
-  let processedAny = false;
+  const rateLimit = parseInt(getConfigValue('rate_limit_ms') || '3000');
 
+  // Collect rows to process (process from bottom to top due to row deletion)
+  const rowsToProcess = [];
   for (let i = 0; i < data.length; i++) {
     const labelsToApply = data[i][4]; // Column E
     const status = data[i][5]; // Column F
 
     if (status === 'Processing' && labelsToApply && labelsToApply.trim() !== '') {
-      // Process this row
-      const rowNum = i + 2;
-      processQueueRow(rowNum);
-      processedAny = true;
-      break; // Process one at a time, let next check handle the rest
+      rowsToProcess.push(i + 2); // Row number (1-indexed, skip header)
+    }
+  }
+
+  // Process from bottom to top so row deletions don't affect indices
+  rowsToProcess.sort((a, b) => b - a);
+
+  let processedCount = 0;
+  for (const rowNum of rowsToProcess) {
+    processQueueRow(rowNum);
+    processedCount++;
+
+    // Rate limiting between rows
+    if (processedCount < rowsToProcess.length) {
+      Utilities.sleep(rateLimit);
     }
   }
 
   // If we processed something, schedule a quick follow-up check
-  if (processedAny) {
+  if (processedCount > 0) {
+    logAction('SYSTEM', 'BATCH_CHECK', `Processed ${processedCount} row(s)`);
     scheduleQuickCheck();
   }
 }
