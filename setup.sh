@@ -44,8 +44,22 @@ if [ -f "$SCRIPT_DIR/.clasp.json" ]; then
     rm -f "$SCRIPT_DIR/.clasp.json"
 fi
 
-# Fix Node v25 memory bug
-export NODE_OPTIONS="--max-old-space-size=4096"
+# Check Node version - v25 has memory bugs with clasp
+NODE_VERSION=$(node -v 2>/dev/null | cut -d'.' -f1 | tr -d 'v')
+if [ "$NODE_VERSION" == "25" ]; then
+    echo "WARNING: Node v25 has known memory bugs with clasp."
+    echo ""
+    echo "Recommended: Downgrade to Node v20 LTS:"
+    echo "  brew unlink node"
+    echo "  brew install node@20"
+    echo "  brew link --overwrite node@20"
+    echo ""
+    echo "Attempting to continue with memory workaround..."
+    echo ""
+fi
+
+# Fix Node v25 memory bug - use maximum heap size
+export NODE_OPTIONS="--max-old-space-size=8192"
 
 # Handle --switch-account flag
 if [ "$1" == "--switch-account" ]; then
