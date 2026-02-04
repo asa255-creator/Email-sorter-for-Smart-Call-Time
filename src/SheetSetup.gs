@@ -12,6 +12,7 @@
 
 /**
  * Creates the Config sheet with default settings.
+ * Three columns: Setting, Value (with dropdowns where applicable), Description
  * @param {Spreadsheet} ss - The spreadsheet object
  */
 function createConfigSheet(ss) {
@@ -23,23 +24,35 @@ function createConfigSheet(ss) {
   sheet.clear();
 
   // Headers
-  sheet.getRange('A1:B1').setValues([['Setting', 'Value']]);
-  sheet.getRange('A1:B1')
+  sheet.getRange('A1:C1').setValues([['Setting', 'Value', 'Description']]);
+  sheet.getRange('A1:C1')
     .setFontWeight('bold')
     .setBackground('#4285f4')
     .setFontColor('white');
 
-  // Default configuration
+  // Default configuration with descriptions
   const config = [
-    ['rate_limit_ms', '3000'],
-    ['batch_size', '50'],
-    ['last_label_sync', ''],
-    ['setup_complete', 'true'],
-    ['version', '1.0.0']
+    ['chat_webhook_url', 'https://chat.googleapis.com/v1/spaces/AAQAULujEoo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=O3mPCLnQbJzrWcN-qrZGqWBlTiAJbBukWCffMZh1VuQ', 'Webhook URL for outbound notifications to Google Chat. Script posts here to notify Flow.'],
+    ['instance_name', '', 'Unique identifier for this instance. Appears at start of Chat messages. Flow filters on this. Example: Johns_Sorter'],
+    ['rate_limit_ms', '3000', 'Milliseconds to wait between processing emails in batch mode.'],
+    ['batch_size', '50', 'Maximum number of emails to queue at once.'],
+    ['last_label_sync', '', 'Timestamp of last Gmail label sync.'],
+    ['setup_complete', 'true', 'Whether initial setup has been completed.'],
+    ['version', '1.1.0', 'Version of Smart Call Time installed.']
   ];
 
-  sheet.getRange(2, 1, config.length, 2).setValues(config);
-  sheet.autoResizeColumns(1, 2);
+  sheet.getRange(2, 1, config.length, 3).setValues(config);
+
+  // Format columns
+  sheet.setColumnWidth(1, 150);
+  sheet.setColumnWidth(2, 300);
+  sheet.setColumnWidth(3, 500);
+
+  // Wrap text in description column
+  sheet.getRange('C:C').setWrap(true);
+
+  // Light background for description column
+  sheet.getRange(2, 3, config.length, 1).setBackground('#f8f9fa');
 
   // Hide config sheet from regular users
   sheet.hideSheet();

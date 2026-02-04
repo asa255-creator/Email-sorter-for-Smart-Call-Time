@@ -74,7 +74,7 @@ function setupTriggers() {
 
 /**
  * Main setup for Email Sorter module.
- * Creates sheets, syncs labels, and sets up triggers.
+ * Creates sheets, syncs labels, sets up triggers, and prompts for instance name.
  */
 function emailSorterSetup() {
   const ui = SpreadsheetApp.getUi();
@@ -97,6 +97,9 @@ function emailSorterSetup() {
   // Setup triggers
   setupTriggers();
 
+  // Prompt for instance name if not set
+  promptForInstanceName(ui);
+
   // Navigate to Instructions
   const instructionsSheet = ss.getSheetByName('Instructions');
   if (instructionsSheet) {
@@ -106,9 +109,38 @@ function emailSorterSetup() {
   ui.alert('Setup Complete!',
     'Email Sorter is ready.\n\n' +
     '1. Review the Instructions sheet\n' +
-    '2. Configure your Google Flows\n\n' +
+    '2. Configure your Google Flows\n' +
+    '3. Instance name: ' + (getConfigValue('instance_name') || '(not set)') + '\n\n' +
     'Labels have been synced to the Labels sheet.',
     ui.ButtonSet.OK);
+}
+
+/**
+ * Prompts the user to set their instance name if not already configured.
+ * @param {Ui} ui - The SpreadsheetApp UI object
+ */
+function promptForInstanceName(ui) {
+  const currentName = getConfigValue('instance_name');
+
+  if (!currentName) {
+    const response = ui.prompt('Instance Name',
+      'Enter a unique name for this instance.\n\n' +
+      'This name appears in Chat messages and is used by Flow to filter.\n' +
+      'Use letters, numbers, and underscores only.\n\n' +
+      'Example: Johns_Sorter, Sales_Team, Personal_Email',
+      ui.ButtonSet.OK_CANCEL);
+
+    if (response.getSelectedButton() === ui.Button.OK) {
+      let instanceName = response.getResponseText().trim();
+      // Replace spaces with underscores, remove special characters
+      instanceName = instanceName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+
+      if (instanceName) {
+        setConfigValue('instance_name', instanceName);
+        logAction('SYSTEM', 'CONFIG', `Instance name set to: ${instanceName}`);
+      }
+    }
+  }
 }
 
 /**
