@@ -11,91 +11,81 @@ A Google Workspace integration for sorting emails using Google Flows + AI.
 
 ---
 
-## Quick Update (existing users)
+## First-Time Setup
 
-If you already have this installed and want to update to the latest code:
+### Prerequisites
 
-```bash
-cd Email-sorter-for-Smart-Call-Time && git pull && cd src && clasp push
-```
+1. **Install Node.js** (use v20 LTS, NOT v25 which has memory bugs):
+   - Mac: `brew install node@20`
+   - Windows: Download from https://nodejs.org/ (LTS version)
 
-**Note:** This only updates the code. Your triggers, sheets, and data are NOT affected. You do NOT need to re-run setup.
+2. **Install clasp:**
+   ```bash
+   npm install -g @google/clasp
+   ```
 
----
+3. **Clone the repo:**
+   ```bash
+   git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git
+   cd Email-sorter-for-Smart-Call-Time
+   ```
 
-## Step-by-Step Installation
-
-### Step 1: Install Homebrew (Mac only, skip if already installed)
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-Follow the prompts. When done, close and reopen Terminal.
-
-### Step 2: Install Node.js
-
-**Mac:**
-```bash
-brew install node
-```
-
-**Windows:**
-Download and install from https://nodejs.org/
-
-**Verify installation:**
-```bash
-node --version
-npm --version
-```
-
-### Step 3: Install clasp (Google Apps Script CLI)
-
-```bash
-npm install -g @google/clasp
-```
-
-### Step 4: Clone this repository
-
-```bash
-git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git
-cd Email-sorter-for-Smart-Call-Time
-```
-
-### Step 5: Run the setup script
+### Option A: Create NEW Google Sheet (first time)
 
 ```bash
 ./setup.sh
 ```
 
-The script will:
-1. Ask you to log in to your Google account
-2. Create a new Google Sheet with all the code attached
-3. Show you the URL to open
-
-### Step 6: Initialize the Email Sorter
-
-1. Open the spreadsheet URL from the setup output
-2. **Refresh** the page
+Choose option 1, then:
+1. Open the spreadsheet URL
+2. Refresh the page
 3. Click **Smart Call Time > Email Sorter > Setup**
-4. Grant the required permissions when prompted
+4. Grant permissions when prompted
 
-### Step 7: Configure Google Flows
+### Option B: Push to EXISTING Apps Script project
 
-See the **Instructions** sheet in your spreadsheet for:
-- How to set up Flows for new emails
-- How to set up Flows for batch processing old emails
-- AI prompt templates
+1. Get your Script ID from: Apps Script Editor > Project Settings > Script ID
+
+2. Create `.clasp.json` in the `src/` folder:
+   ```bash
+   cd src
+   echo '{"scriptId":"YOUR_SCRIPT_ID_HERE","rootDir":"."}' > .clasp.json
+   ```
+
+3. Push the code:
+   ```bash
+   clasp push
+   ```
+
+---
+
+## Updating Code After Changes
+
+If you already have this set up and want to push updated code:
+
+```bash
+cd Email-sorter-for-Smart-Call-Time
+git pull
+cd src
+clasp push
+```
+
+**If you get memory errors** (Node v25 bug):
+```bash
+NODE_OPTIONS="--max-old-space-size=4096" clasp push
+```
+
+Or downgrade to Node v20:
+```bash
+brew install node@20
+brew unlink node
+brew link node@20
+```
 
 ---
 
 ## Switching Google Accounts
 
-```bash
-./setup.sh --switch-account
-```
-
-Or manually:
 ```bash
 clasp logout
 clasp login
