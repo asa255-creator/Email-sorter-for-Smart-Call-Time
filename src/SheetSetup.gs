@@ -30,10 +30,21 @@ function createConfigSheet(ss) {
     .setBackground('#4285f4')
     .setFontColor('white');
 
+  // Auto-generate instance_name from user's email
+  let instanceName = '';
+  try {
+    const email = Session.getActiveUser().getEmail();
+    if (email) {
+      instanceName = email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '_');
+    }
+  } catch (e) {
+    instanceName = ss.getName().replace(/[^a-zA-Z0-9]/g, '_');
+  }
+
   // Default configuration with descriptions
   const config = [
     ['chat_webhook_url', 'https://chat.googleapis.com/v1/spaces/AAQAULujEoo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=O3mPCLnQbJzrWcN-qrZGqWBlTiAJbBukWCffMZh1VuQ', 'Webhook URL for outbound notifications to Google Chat. Script posts here to notify Flow.'],
-    ['instance_name', '', 'Unique identifier for this instance. Appears at start of Chat messages. Flow filters on this. Example: Johns_Sorter'],
+    ['instance_name', instanceName, 'Auto-generated from your email. Appears in Chat messages so Flow can identify this instance.'],
     ['rate_limit_ms', '3000', 'Milliseconds to wait between processing emails in batch mode.'],
     ['batch_size', '50', 'Maximum number of emails to queue at once.'],
     ['last_label_sync', '', 'Timestamp of last Gmail label sync.'],
@@ -267,6 +278,55 @@ function buildInstructionsContent() {
     ['Script checks every 15 minutes (or 30 seconds after activity).'],
     ['When labels are found, script applies them, deletes row, promotes next.'],
     ['This triggers Flow again for the next email.'],
+    [''],
+    ['═══════════════════════════════════════════════════════════════'],
+    ['GOOGLE FLOWS SETUP'],
+    ['═══════════════════════════════════════════════════════════════'],
+    [''],
+    ['The script sends notifications to Google Chat. Flow watches Chat and acts.'],
+    [''],
+    ['MESSAGE FORMAT SENT TO CHAT:'],
+    ['  [instance_name] MESSAGE_TYPE | SheetID: xxx | URL: https://...'],
+    [''],
+    ['  Example:'],
+    ['  [john_doe] OLD_EMAIL_READY | SheetID: 1abc... | URL: https://docs.google.com/...'],
+    [''],
+    ['MESSAGE TYPES:'],
+    ['  - OLD_EMAIL_READY: An email in Queue is ready for Flow to categorize'],
+    ['  - QUEUE_STARTED: Batch of emails has been queued'],
+    ['  - QUEUE_COMPLETE: All queued emails have been processed'],
+    [''],
+    ['FLOW SETUP STEPS:'],
+    [''],
+    ['1. Create a Google Chat Space for notifications'],
+    ['   - Go to Google Chat > Spaces > Create space'],
+    ['   - Name it (e.g., "Email Sorter Alerts")'],
+    [''],
+    ['2. Get the webhook URL for the space'],
+    ['   - In the space: Settings > Manage webhooks'],
+    ['   - Create webhook, copy the URL'],
+    ['   - Update chat_webhook_url in Config sheet (unhide it first)'],
+    [''],
+    ['3. Create a Google Flow that watches the Chat space'],
+    ['   TRIGGER: "When a message is posted to Google Chat"'],
+    ['   - Select your notification space'],
+    [''],
+    ['4. Add a FILTER condition:'],
+    ['   - Message text CONTAINS "OLD_EMAIL_READY"'],
+    ['   - (Optional) Also filter on your instance_name: "[john_doe]"'],
+    [''],
+    ['5. Add PARSE step to extract SheetID from message:'],
+    ['   - Use regex or string functions to extract the SheetID value'],
+    ['   - The SheetID follows "SheetID: " in the message'],
+    [''],
+    ['6. Add steps to:'],
+    ['   a. Open the spreadsheet using extracted SheetID'],
+    ['   b. Read Labels sheet for available labels + descriptions'],
+    ['   c. Read Queue sheet row where Status = "Processing"'],
+    ['   d. Send Context column (H) + Labels to AI'],
+    ['   e. Update Labels to Apply column (E) with AI response'],
+    [''],
+    ['The script auto-checks every 15 min and applies labels when filled in.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
     ['AI PROMPT TEMPLATE'],

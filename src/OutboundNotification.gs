@@ -11,39 +11,73 @@
 // ============================================================================
 
 /**
+ * Gets or generates the instance name.
+ * If not configured, generates from user's email.
+ * @returns {string} Instance name
+ */
+function getInstanceName() {
+  let instanceName = getConfigValue('instance_name');
+
+  if (!instanceName || instanceName.trim() === '') {
+    // Auto-generate from user's email
+    try {
+      const email = Session.getActiveUser().getEmail();
+      if (email) {
+        // Use part before @ and sanitize
+        instanceName = email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '_');
+      }
+    } catch (e) {
+      // Fallback to spreadsheet name
+      const ss = SpreadsheetApp.getActive();
+      if (ss) {
+        instanceName = ss.getName().replace(/[^a-zA-Z0-9]/g, '_');
+      }
+    }
+
+    // Save it for future use
+    if (instanceName) {
+      setConfigValue('instance_name', instanceName);
+    }
+  }
+
+  return instanceName || 'Unknown_Instance';
+}
+
+/**
  * Sends an outbound notification to the configured Google Chat webhook.
  * @param {string} messageType - Type of notification (e.g., 'OLD_EMAIL_READY')
  * @param {Object} data - Optional data to include
  */
 function sendOutboundNotification(messageType, data) {
   const webhookUrl = getConfigValue('chat_webhook_url');
-  const instanceName = getConfigValue('instance_name');
 
   if (!webhookUrl) {
     logAction('SYSTEM', 'NOTIFY_SKIP', 'No chat_webhook_url configured');
     return;
   }
 
-  if (!instanceName) {
-    logAction('SYSTEM', 'NOTIFY_SKIP', 'No instance_name configured');
-    return;
-  }
-
+  const instanceName = getInstanceName();
   const message = buildOutboundMessage(instanceName, messageType, data);
   postToChat(webhookUrl, message);
 }
 
 /**
- * Builds the outbound message string.
+ * Builds the outbound message string with all info Flow needs.
  * @param {string} instanceName - Unique instance identifier
  * @param {string} messageType - Type of notification
  * @param {Object} data - Optional data
  * @returns {string} Formatted message
  */
 function buildOutboundMessage(instanceName, messageType, data) {
-  // Format: [instance_name] MESSAGE_TYPE
-  // Example: [Johns_Sorter] OLD_EMAIL_READY
+  const ss = SpreadsheetApp.getActive();
+  const spreadsheetId = ss ? ss.getId() : 'unknown';
+  const spreadsheetUrl = ss ? ss.getUrl() : 'unknown';
+
+  // Format: [instance_name] MESSAGE_TYPE | Sheet: spreadsheet_id | URL: url
+  // This gives Flow all the info it needs to work with the right sheet
   let message = `[${instanceName}] ${messageType}`;
+  message += ` | SheetID: ${spreadsheetId}`;
+  message += ` | URL: ${spreadsheetUrl}`;
 
   // Add optional data if provided
   if (data && data.count) {
