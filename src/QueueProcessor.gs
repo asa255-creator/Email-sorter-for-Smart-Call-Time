@@ -43,19 +43,19 @@ function queueUnlabeledEmails() {
   // Check if there's already a "Processing" row
   const hasProcessing = hasProcessingRow(sheet);
 
-  // Build new rows with full email context
+  // Build new rows - only fetch full context for first (Processing) row
   const newRows = [];
   threads.forEach((thread, index) => {
     const message = thread.getMessages()[0];
     const emailId = message.getId();
 
     if (!existingIds.has(emailId)) {
-      // Build context: full email dump for AI
-      const context = buildEmailContext(message);
-
       // First new row gets "Processing" if no existing Processing row
       const isFirstNew = newRows.length === 0;
       const status = (isFirstNew && !hasProcessing) ? 'Processing' : 'Pending';
+
+      // Only fetch full context for Processing row (slow operation)
+      const context = (status === 'Processing') ? buildEmailContext(message) : '';
 
       newRows.push([
         emailId,
@@ -65,7 +65,7 @@ function queueUnlabeledEmails() {
         '', // Labels to Apply - Flow fills this
         status,
         '', // Processed At
-        context // Full email content
+        context
       ]);
     }
   });
@@ -215,6 +215,7 @@ function processQueueRow(rowNumber) {
 
 /**
  * Promotes the first "Pending" row to "Processing".
+ * Also populates the Context column if empty.
  * This triggers the Flow to process the next email.
  */
 function promoteNextPending() {
@@ -226,13 +227,30 @@ function promoteNextPending() {
   if (lastRow <= 1) return; // No data rows
 
   // Find first Pending row (start from row 2)
-  const statuses = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+  const data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
 
-  for (let i = 0; i < statuses.length; i++) {
-    if (statuses[i][0] === 'Pending') {
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][5] === 'Pending') { // Column F = Status
+      const rowNum = i + 2;
+      const emailId = data[i][0]; // Column A
+      const context = data[i][7]; // Column H
+
+      // If Context is empty, populate it now
+      if (!context || context.trim() === '') {
+        try {
+          const message = GmailApp.getMessageById(emailId);
+          if (message) {
+            const fullContext = buildEmailContext(message);
+            sheet.getRange(rowNum, 8).setValue(fullContext);
+          }
+        } catch (e) {
+          logAction(emailId, 'WARN', 'Could not fetch email context: ' + e.message);
+        }
+      }
+
       // Change to Processing - this edit triggers Flow
-      sheet.getRange(i + 2, 6).setValue('Processing');
-      logAction('SYSTEM', 'PROMOTE', `Row ${i + 2} promoted to Processing`);
+      sheet.getRange(rowNum, 6).setValue('Processing');
+      logAction('SYSTEM', 'PROMOTE', `Row ${rowNum} promoted to Processing`);
       return;
     }
   }
