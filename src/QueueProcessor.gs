@@ -82,6 +82,10 @@ function queueUnlabeledEmails() {
   const startRow = sheet.getLastRow() + 1;
   sheet.getRange(startRow, 1, newRows.length, 8).setValues(newRows);
 
+  // Send outbound notification to Google Chat
+  notifyQueueStarted(newRows.length);
+  notifyOldEmailReady();
+
   ui.alert('Emails Queued',
     `Added ${newRows.length} emails to the queue.\n\n` +
     'Flow will process emails one at a time:\n' +
@@ -232,14 +236,18 @@ function promoteNextPending() {
 
   for (let i = 0; i < statuses.length; i++) {
     if (statuses[i][0] === 'Pending') {
-      // Change to Processing - this edit triggers Flow
+      // Change to Processing
       sheet.getRange(i + 2, 6).setValue('Processing');
       logAction('SYSTEM', 'PROMOTE', `Row ${i + 2} promoted to Processing`);
+
+      // Send outbound notification to Google Chat
+      notifyOldEmailReady();
       return;
     }
   }
 
   // No more Pending rows - queue is complete
+  notifyQueueComplete();
   logAction('SYSTEM', 'COMPLETE', 'Queue processing complete');
 }
 
