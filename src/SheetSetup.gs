@@ -93,7 +93,7 @@ function createQueueSheet(ss) {
 
   sheet.clear();
 
-  // Headers
+  // Headers - Context column (H) holds full email content for old emails
   const headers = [
     'Email ID',
     'Subject',
@@ -101,7 +101,8 @@ function createQueueSheet(ss) {
     'Date',
     'Labels to Apply',
     'Status',
-    'Processed At'
+    'Processed At',
+    'Context'
   ];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(1, 1, 1, headers.length)
@@ -109,26 +110,30 @@ function createQueueSheet(ss) {
     .setBackground('#fbbc04')
     .setFontColor('black');
 
-  // Status dropdown validation
+  // Status dropdown validation - only Processing, Pending, Error
   const statusRule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['Pending', 'Processing', 'Complete', 'Error', 'Skipped'], true)
+    .requireValueInList(['Processing', 'Pending', 'Error'], true)
     .build();
   sheet.getRange('F2:F1000').setDataValidation(statusRule);
 
   sheet.setFrozenRows(1);
-  sheet.autoResizeColumns(1, headers.length);
+  sheet.autoResizeColumns(1, 7);
+  sheet.setColumnWidth(8, 400); // Context column wider
 
   // Workflow explanation
   sheet.getRange('A1').setNote(
-    'EMAIL PROCESSING WORKFLOW:\n\n' +
-    '1. Run "Queue Unread Emails" to add emails here\n' +
-    '2. Google Flow reads rows where Status = "Pending"\n' +
-    '3. Flow determines labels and writes to "Labels to Apply" column\n' +
-    '4. Script automatically applies labels and sets Status = "Complete"\n\n' +
-    'Columns:\n' +
-    '- Email ID: Unique Gmail message ID\n' +
-    '- Labels to Apply: Comma-separated label names (filled by Flow)\n' +
-    '- Status: Pending → Processing → Complete/Error/Skipped'
+    'EMAIL PROCESSING QUEUE\n\n' +
+    'Flow triggers on rows where Status = "Processing"\n\n' +
+    'WORKFLOW:\n' +
+    '1. First row has Status = "Processing" (Flow processes this)\n' +
+    '2. Flow fills "Labels to Apply" column\n' +
+    '3. Script applies labels and deletes the row\n' +
+    '4. Next "Pending" row becomes "Processing"\n' +
+    '5. This triggers Flow again for the next email\n\n' +
+    'COLUMNS:\n' +
+    '- Context: Full email content (for old emails only)\n' +
+    '- Status: "Processing" = active, "Pending" = waiting\n' +
+    '- Rows are DELETED after successful labeling'
   );
 }
 
@@ -200,105 +205,113 @@ function buildInstructionsContent() {
   return [
     ['SMART CALL TIME - EMAIL SORTER'],
     [''],
-    ['This system lets Google Flows automatically sort your emails using the Labels sheet.'],
-    ['Flow reads labels dynamically from this spreadsheet - no hardcoded values.'],
+    ['This system lets Google Flows automatically sort your emails.'],
+    ['Flow reads labels from Labels sheet and processes emails one at a time.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
     ['HOW IT WORKS'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['1. Labels sheet: Your Gmail labels with optional descriptions'],
-    ['2. Queue sheet: Temporary processing area (rows deleted after labeling)'],
-    ['3. Flow reads Labels sheet, writes to Queue, script applies labels'],
+    ['1. Labels sheet: Your Gmail labels with descriptions for AI context'],
+    ['2. Queue sheet: Emails waiting to be labeled (deleted after processing)'],
+    ['3. Flow triggers on Status = "Processing" and fills Labels to Apply'],
+    ['4. Script applies labels, deletes row, promotes next to "Processing"'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
-    ['GOOGLE FLOW SETUP'],
+    ['FLOW FOR NEW EMAILS'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
     ['TRIGGER: When a new email arrives in Gmail'],
     [''],
-    ['FLOW STEPS:'],
+    ['STEPS:'],
+    ['1. Read "Labels" sheet to get label names + descriptions'],
+    ['2. Send to AI with email details (see prompt template below)'],
+    ['3. Add row to "Queue" sheet:'],
+    ['   - Email ID, Subject, From, Date from trigger'],
+    ['   - Labels to Apply: AI response'],
+    ['   - Status: "Processing"'],
+    ['   - Context: (leave empty - you have email data from trigger)'],
     [''],
-    ['Step 1: Read the "Labels" sheet from this spreadsheet'],
-    ['   - Get all rows from Labels sheet'],
-    ['   - This gives you Label Name and Description for each label'],
+    ['Script applies labels and deletes the row automatically.'],
     [''],
-    ['Step 2: Build the AI prompt dynamically'],
-    ['   - Insert the label names (and descriptions) from Step 1 into the prompt'],
-    ['   - See AI PROMPT TEMPLATE below'],
+    ['═══════════════════════════════════════════════════════════════'],
+    ['FLOW FOR OLD EMAILS (QUEUE)'],
+    ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['Step 3: Send to AI with email details'],
-    ['   - Include sender, subject, body preview from the email trigger'],
+    ['First: Run menu > Smart Call Time > Email Sorter > Queue Unread Emails'],
+    ['This adds old emails with full content in the Context column.'],
     [''],
-    ['Step 4: Add row to "Queue" sheet'],
-    ['   - Email ID, Subject, From, Date'],
-    ['   - Labels to Apply: AI response (comma-separated labels)'],
-    ['   - Status: "Pending"'],
+    ['TRIGGER: When Queue sheet is modified'],
+    ['FILTER: Status = "Processing" AND Labels to Apply is empty'],
     [''],
-    ['The script automatically applies labels and removes the row from Queue.'],
+    ['STEPS:'],
+    ['1. Read "Labels" sheet to get label names + descriptions'],
+    ['2. Read the Context column (H) - contains full email content'],
+    ['3. Send Context + Labels to AI'],
+    ['4. Update the row: fill "Labels to Apply" column with AI response'],
+    [''],
+    ['Script applies labels, deletes row, promotes next Pending to Processing.'],
+    ['This triggers the Flow again for the next email.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
     ['AI PROMPT TEMPLATE'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
-    ['Use this template in your Flow. Replace placeholders with dynamic values:'],
-    [''],
     ['--- PROMPT TEMPLATE ---'],
     ['You are an email categorization assistant.'],
     [''],
-    ['AVAILABLE LABELS (from Labels sheet):'],
-    ['{Insert label names and descriptions from Labels sheet here}'],
+    ['AVAILABLE LABELS:'],
+    ['{Insert label names and descriptions from Labels sheet}'],
     [''],
-    ['EMAIL TO CATEGORIZE:'],
-    ['From: {email sender from trigger}'],
-    ['Subject: {email subject from trigger}'],
-    ['Body: {email body preview from trigger}'],
+    ['EMAIL:'],
+    ['{For new emails: use trigger data}'],
+    ['{For old emails: use Context column content}'],
     [''],
-    ['INSTRUCTIONS:'],
-    ['1. Select 1-3 labels that best fit this email'],
-    ['2. ONLY use labels from the AVAILABLE LABELS list above'],
-    ['3. If no labels fit, respond with: NONE'],
+    ['RULES:'],
+    ['1. Select 1-3 labels that best fit'],
+    ['2. ONLY use labels from AVAILABLE LABELS'],
+    ['3. If nothing fits: respond NONE'],
     [''],
-    ['Respond with ONLY the label names, comma-separated. Example: Work, Clients'],
+    ['Respond with comma-separated label names only.'],
     ['--- END TEMPLATE ---'],
-    [''],
-    ['IMPORTANT: Your Flow must read the Labels sheet and insert those values'],
-    ['into the prompt. Do NOT hardcode label names in the Flow.'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
     ['SHEET COLUMNS'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
     ['LABELS SHEET:'],
-    ['  A: Label Name - The Gmail label name'],
-    ['  B: Label ID - Gmail internal ID (auto-filled)'],
-    ['  C: Nested Path - Full path for nested labels'],
-    ['  D: Type - user or system'],
-    ['  E: Description - Your description for AI context (editable)'],
-    ['  F: Last Updated - Sync timestamp'],
+    ['  A: Label Name'],
+    ['  B: Label ID'],
+    ['  C: Nested Path'],
+    ['  D: Type'],
+    ['  E: Description (editable - helps AI understand label purpose)'],
+    ['  F: Last Updated'],
     [''],
     ['QUEUE SHEET:'],
-    ['  A: Email ID - Gmail message ID'],
+    ['  A: Email ID'],
     ['  B: Subject'],
     ['  C: From'],
     ['  D: Date'],
-    ['  E: Labels to Apply - Comma-separated (Flow fills this)'],
-    ['  F: Status - Pending/Processing/Error'],
+    ['  E: Labels to Apply (Flow fills this)'],
+    ['  F: Status ("Processing" or "Pending" or "Error")'],
     ['  G: Processed At'],
+    ['  H: Context (full email content for old emails)'],
     [''],
-    ['  Note: Rows are DELETED after labels are successfully applied.'],
-    ['  Error rows remain for review.'],
+    ['  - "Processing" = Flow should process this row'],
+    ['  - "Pending" = Waiting in line'],
+    ['  - Rows DELETED after successful labeling'],
+    ['  - Error rows kept for review'],
     [''],
     ['═══════════════════════════════════════════════════════════════'],
     ['MENU OPTIONS'],
     ['═══════════════════════════════════════════════════════════════'],
     [''],
     ['Smart Call Time > Email Sorter:'],
-    ['  - Setup / Refresh: Re-run initial setup'],
-    ['  - Sync Labels Now: Update Labels sheet from Gmail'],
-    ['  - Queue Unread Emails: Add unread emails to Queue for processing'],
-    ['  - Process All Pending: Manually process queued items'],
-    ['  - Clear Queue: Remove all items from Queue'],
+    ['  - Setup / Refresh: Re-run setup'],
+    ['  - Sync Labels Now: Refresh labels from Gmail'],
+    ['  - Queue Unread Emails: Add old emails to queue'],
+    ['  - Process All Pending: Manually apply labels'],
+    ['  - Clear Queue: Remove all items'],
   ];
 }
 

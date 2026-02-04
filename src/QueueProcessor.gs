@@ -14,6 +14,8 @@
 
 /**
  * Adds all unread emails to the Queue sheet for processing.
+ * First email gets Status = "Processing", rest get "Pending".
+ * Context column filled with full email content for Flow/AI to read.
  * Called via menu: Smart Call Time > Email Sorter > Queue Unread Emails
  */
 function queueUnreadEmails() {
@@ -37,21 +39,32 @@ function queueUnreadEmails() {
   // Get existing email IDs to avoid duplicates
   const existingIds = getExistingQueueIds(sheet);
 
-  // Build new rows
+  // Check if there's already a "Processing" row
+  const hasProcessing = hasProcessingRow(sheet);
+
+  // Build new rows with full email context
   const newRows = [];
-  threads.forEach(thread => {
+  threads.forEach((thread, index) => {
     const message = thread.getMessages()[0];
     const emailId = message.getId();
 
     if (!existingIds.has(emailId)) {
+      // Build context: full email dump for AI
+      const context = buildEmailContext(message);
+
+      // First new row gets "Processing" if no existing Processing row
+      const isFirstNew = newRows.length === 0;
+      const status = (isFirstNew && !hasProcessing) ? 'Processing' : 'Pending';
+
       newRows.push([
         emailId,
         message.getSubject() || '(no subject)',
         message.getFrom(),
         message.getDate().toISOString(),
         '', // Labels to Apply - Flow fills this
-        'Pending',
-        '' // Processed At
+        status,
+        '', // Processed At
+        context // Full email content
       ]);
     }
   });
@@ -63,20 +76,52 @@ function queueUnreadEmails() {
     return;
   }
 
-  // Append to sheet
+  // Append to sheet (8 columns now)
   const startRow = sheet.getLastRow() + 1;
-  sheet.getRange(startRow, 1, newRows.length, 7).setValues(newRows);
+  sheet.getRange(startRow, 1, newRows.length, 8).setValues(newRows);
 
   ui.alert('Emails Queued',
     `Added ${newRows.length} emails to the queue.\n\n` +
-    'Your Google Flow should now:\n' +
-    '1. Read rows where Status = "Pending"\n' +
-    '2. Process each email and determine labels\n' +
-    '3. Write labels to the "Labels to Apply" column\n\n' +
-    'Labels will be automatically applied when updated.',
+    'Flow will process emails one at a time:\n' +
+    '- First row has Status = "Processing"\n' +
+    '- Flow reads Context column for email content\n' +
+    '- After labeling, row is deleted and next becomes "Processing"',
     ui.ButtonSet.OK);
 
   logAction('SYSTEM', 'QUEUE', `Queued ${newRows.length} emails`);
+}
+
+/**
+ * Builds full email context string for AI processing.
+ * @param {GmailMessage} message - The Gmail message
+ * @returns {string} Formatted email content
+ */
+function buildEmailContext(message) {
+  const from = message.getFrom() || '';
+  const subject = message.getSubject() || '(no subject)';
+  const date = message.getDate().toISOString();
+  const body = message.getPlainBody() || '';
+
+  // Truncate body if too long (Sheets cell limit is ~50k chars)
+  const maxBodyLength = 10000;
+  const truncatedBody = body.length > maxBodyLength
+    ? body.substring(0, maxBodyLength) + '\n... [truncated]'
+    : body;
+
+  return `FROM: ${from}\nSUBJECT: ${subject}\nDATE: ${date}\n\nBODY:\n${truncatedBody}`;
+}
+
+/**
+ * Checks if there's already a row with Status = "Processing".
+ * @param {Sheet} sheet - The Queue sheet
+ * @returns {boolean} True if a Processing row exists
+ */
+function hasProcessingRow(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return false;
+
+  const statuses = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+  return statuses.some(row => row[0] === 'Processing');
 }
 
 /**
@@ -104,10 +149,11 @@ function getExistingQueueIds(sheet) {
 
 /**
  * Processes a single queue row when the "Labels to Apply" column is updated.
- * Deletes the row after successful processing (Queue is temporary, not a log).
+ * Only processes rows with Status = "Processing".
+ * Deletes the row after success and promotes next Pending to Processing.
  * Called by the onEdit trigger.
  * @param {number} rowNumber - The row number that was edited
- * @returns {boolean} True if row was deleted (for batch processing offset)
+ * @returns {boolean} True if row was deleted
  */
 function processQueueRow(rowNumber) {
   // Skip header row
@@ -117,31 +163,29 @@ function processQueueRow(rowNumber) {
   const sheet = ss.getSheetByName('Queue');
   if (!sheet) return false;
 
-  // Read the row
-  const row = sheet.getRange(rowNumber, 1, 1, 7).getValues()[0];
+  // Read the row (8 columns now)
+  const row = sheet.getRange(rowNumber, 1, 1, 8).getValues()[0];
   const emailId = row[0];
   const labelsToApply = row[4]; // Column E
   const status = row[5]; // Column F
 
   // Only process if:
   // - We have labels to apply
-  // - Status is still "Pending"
-  if (!labelsToApply || labelsToApply.trim() === '' || status !== 'Pending') {
+  // - Status is "Processing"
+  if (!labelsToApply || labelsToApply.trim() === '' || status !== 'Processing') {
     return false;
   }
 
   // Parse labels (comma-separated)
   const labels = parseLabelsString(labelsToApply);
 
-  // Handle NONE or empty - delete row since there's nothing to do
+  // Handle NONE or empty - delete row and promote next
   if (labels.length === 0) {
     logAction(emailId, 'SKIP', 'No labels to apply');
     sheet.deleteRow(rowNumber);
+    promoteNextPending();
     return true;
   }
-
-  // Set status to Processing
-  sheet.getRange(rowNumber, 6).setValue('Processing');
 
   try {
     // Apply labels
@@ -149,19 +193,55 @@ function processQueueRow(rowNumber) {
 
     // Success - delete the row from queue
     sheet.deleteRow(rowNumber);
+
+    // Promote next Pending row to Processing (triggers Flow again)
+    promoteNextPending();
+
     return true;
 
   } catch (error) {
-    // Handle error - keep row for review
+    // Handle error - keep row for review, but still promote next
     sheet.getRange(rowNumber, 6).setValue('Error');
     sheet.getRange(rowNumber, 7).setValue(new Date().toISOString());
     logAction(emailId, 'ERROR', error.message);
+
+    // Still promote next pending so queue keeps moving
+    promoteNextPending();
+
     return false;
   }
 }
 
 /**
- * Processes all pending items in the queue.
+ * Promotes the first "Pending" row to "Processing".
+ * This triggers the Flow to process the next email.
+ */
+function promoteNextPending() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Queue');
+  if (!sheet) return;
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return; // No data rows
+
+  // Find first Pending row (start from row 2)
+  const statuses = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+
+  for (let i = 0; i < statuses.length; i++) {
+    if (statuses[i][0] === 'Pending') {
+      // Change to Processing - this edit triggers Flow
+      sheet.getRange(i + 2, 6).setValue('Processing');
+      logAction('SYSTEM', 'PROMOTE', `Row ${i + 2} promoted to Processing`);
+      return;
+    }
+  }
+
+  // No more Pending rows - queue is complete
+  logAction('SYSTEM', 'COMPLETE', 'Queue processing complete');
+}
+
+/**
+ * Processes all items in the queue that have labels filled in.
  * Processes from bottom to top to handle row deletions correctly.
  * Called via menu: Smart Call Time > Email Sorter > Process All Pending
  */
@@ -178,12 +258,14 @@ function processAllPending() {
 
   // Process from bottom to top so row deletions don't affect indexes
   for (let rowNum = lastRow; rowNum >= 2; rowNum--) {
-    const row = sheet.getRange(rowNum, 1, 1, 7).getValues()[0];
+    const row = sheet.getRange(rowNum, 1, 1, 8).getValues()[0];
     const labelsToApply = row[4];
     const status = row[5];
 
-    // Only process Pending rows with labels
-    if (labelsToApply && labelsToApply.trim() !== '' && status === 'Pending') {
+    // Process rows with labels that aren't errors
+    if (labelsToApply && labelsToApply.trim() !== '' && status !== 'Error') {
+      // Temporarily set to Processing so processQueueRow will handle it
+      sheet.getRange(rowNum, 6).setValue('Processing');
       processQueueRow(rowNum);
       processed++;
 
@@ -192,7 +274,7 @@ function processAllPending() {
     }
   }
 
-  logAction('SYSTEM', 'BATCH', `Processed ${processed} pending items`);
+  logAction('SYSTEM', 'BATCH', `Processed ${processed} items`);
 }
 
 /**
@@ -213,7 +295,7 @@ function clearQueue() {
   if (response === ui.Button.YES) {
     const lastRow = sheet.getLastRow();
     if (lastRow > 1) {
-      sheet.getRange(2, 1, lastRow - 1, 7).clear();
+      sheet.getRange(2, 1, lastRow - 1, 8).clear();
     }
     ui.alert('Queue Cleared', 'The queue has been cleared.', ui.ButtonSet.OK);
     logAction('SYSTEM', 'CLEAR', 'Queue cleared');
