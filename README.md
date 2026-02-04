@@ -1,21 +1,31 @@
 # Smart Call Time - Flow Integrator
 
-A Google Workspace integration platform for Google Flows. Automatically sort emails using AI-powered categorization.
+A Google Workspace integration for sorting emails using Google Flows + AI.
 
 ## Features
 
 - Automatically sort Gmail emails into labels using Google Flows + AI
-- Real-time processing of new emails via web app API
-- Batch processing of existing unread emails via queue
-- Labels synced to spreadsheet for easy Flow access
+- Flow reads labels dynamically from spreadsheet (no hardcoding)
+- Queue processes emails one at a time (Processing/Pending status)
+- Full email context provided for old emails
+
+---
+
+## Quick Update (existing users)
+
+If you already have this installed and want to update to the latest code:
+
+```bash
+cd Email-sorter-for-Smart-Call-Time && git pull && cd src && clasp push
+```
+
+**Note:** This only updates the code. Your triggers, sheets, and data are NOT affected. You do NOT need to re-run setup.
 
 ---
 
 ## Step-by-Step Installation
 
 ### Step 1: Install Homebrew (Mac only, skip if already installed)
-
-Open Terminal and run:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -59,37 +69,27 @@ cd Email-sorter-for-Smart-Call-Time
 ```
 
 The script will:
-1. Ask you to log in to your Google account (choose which account to use)
+1. Ask you to log in to your Google account
 2. Create a new Google Sheet with all the code attached
-3. Open the Sheet in your browser
+3. Show you the URL to open
 
 ### Step 6: Initialize the Email Sorter
 
-1. **Refresh** the spreadsheet in your browser
-2. Click **Smart Call Time > Email Sorter > Setup**
-3. Grant the required permissions when prompted
+1. Open the spreadsheet URL from the setup output
+2. **Refresh** the page
+3. Click **Smart Call Time > Email Sorter > Setup**
+4. Grant the required permissions when prompted
 
-### Step 7: Deploy as Web App
-
-1. In the spreadsheet, go to **Extensions > Apps Script**
-2. Click **Deploy > New deployment**
-3. Select type: **Web app**
-4. Execute as: **Me**
-5. Who has access: **Anyone**
-6. Click **Deploy** and copy the URL
-
-### Step 8: Configure Google Flows
+### Step 7: Configure Google Flows
 
 See the **Instructions** sheet in your spreadsheet for:
 - How to set up Flows for new emails
-- How to set up Flows for batch processing
+- How to set up Flows for batch processing old emails
 - AI prompt templates
 
 ---
 
 ## Switching Google Accounts
-
-To deploy to a different Google account:
 
 ```bash
 ./setup.sh --switch-account
@@ -108,14 +108,13 @@ clasp login
 ```
 src/
 ├── Main.gs             # Entry points, menu, triggers
-├── SheetSetup.gs       # Sheet creation
+├── SheetSetup.gs       # Sheet creation and instructions
 ├── LabelManager.gs     # Gmail label operations
 ├── QueueProcessor.gs   # Email queue processing
-├── ApiHandler.gs       # Web app API endpoints
 ├── ConfigManager.gs    # Configuration management
-└── Logger.gs           # Logging utilities
+├── Logger.gs           # Logging utilities
+└── appsscript.json     # Apps Script manifest
 
-appsscript.json         # Apps Script manifest
 setup.sh                # Deployment script
 ```
 
@@ -131,16 +130,19 @@ setup.sh                # Deployment script
 ```
 
 ### New Emails
-1. Flow triggers on new Gmail
-2. Flow reads **Labels** sheet
+1. Flow triggers on new Gmail arrival
+2. Flow reads **Labels** sheet for available labels
 3. Flow uses AI to select labels
-4. Flow calls web app API to apply labels
+4. Flow adds row to **Queue** with Status = "Processing"
+5. Script applies labels and deletes the row
 
 ### Old Emails (Queue)
-1. Menu: **Queue Unread Emails**
-2. Flow reads **Queue** sheet (Status = "Pending")
-3. Flow writes labels to "Labels to Apply" column
-4. Script auto-applies labels
+1. Menu: **Queue Unread Emails** (adds emails with Context filled)
+2. First row gets Status = "Processing"
+3. Flow triggers on "Processing" row, reads Context column
+4. Flow writes labels to "Labels to Apply" column
+5. Script applies labels, deletes row, promotes next to "Processing"
+6. This triggers Flow again for next email
 
 ---
 
@@ -148,35 +150,26 @@ setup.sh                # Deployment script
 
 | Sheet | Purpose |
 |-------|---------|
-| **Instructions** | Setup guide, AI prompts, API reference |
-| **Labels** | Gmail labels synced from your account |
-| **Queue** | Email processing queue |
+| **Instructions** | Setup guide, Flow instructions, AI prompts |
+| **Labels** | Gmail labels with Description column for AI context |
+| **Queue** | Email processing queue with Context column |
 | **Config** | Settings (hidden) |
 | **Log** | Processing history |
 
 ---
 
-## API Reference
+## Queue Columns
 
-### POST: APPLY_LABELS
-```json
-{"command": "APPLY_LABELS", "emailId": "abc123", "labels": ["Work", "Important"]}
-```
-
-### POST: GET_LABELS
-```json
-{"command": "GET_LABELS"}
-```
-
-### POST: REMOVE_LABELS
-```json
-{"command": "REMOVE_LABELS", "emailId": "abc123", "labels": ["OldLabel"]}
-```
-
-### POST: SYNC_LABELS
-```json
-{"command": "SYNC_LABELS"}
-```
+| Column | Purpose |
+|--------|---------|
+| A: Email ID | Gmail message ID |
+| B: Subject | Email subject |
+| C: From | Sender |
+| D: Date | Email date |
+| E: Labels to Apply | Flow fills this |
+| F: Status | "Processing" / "Pending" / "Error" |
+| G: Processed At | Timestamp |
+| H: Context | Full email content (for old emails) |
 
 ---
 
@@ -184,11 +177,11 @@ setup.sh                # Deployment script
 
 | Menu | Action |
 |------|--------|
-| Email Sorter > Setup | Initialize sheets and sync labels |
-| Email Sorter > Sync Labels | Refresh Gmail labels |
-| Email Sorter > Queue Unread Emails | Add unread emails to queue |
-| Email Sorter > Process All Pending | Process queued items |
-| Email Sorter > Clear Queue | Clear the queue |
+| Setup / Refresh | Initialize sheets and sync labels |
+| Sync Labels Now | Refresh Gmail labels |
+| Queue Unread Emails | Add old unread emails to queue |
+| Process All Pending | Manually process queued items |
+| Clear Queue | Clear the queue |
 
 ---
 
@@ -198,7 +191,6 @@ setup.sh                # Deployment script
 clasp push          # Push changes to Apps Script
 clasp push --watch  # Watch and auto-push
 clasp pull          # Pull changes from Apps Script
-clasp open          # Open in browser
 ```
 
 ---
@@ -206,7 +198,7 @@ clasp open          # Open in browser
 ## Troubleshooting
 
 ### "command not found: npm"
-You need to install Node.js first. See Step 2.
+Install Node.js first. See Step 2.
 
 ### "command not found: clasp"
 Run: `npm install -g @google/clasp`
