@@ -96,17 +96,23 @@ clasp login
 ## Project Structure
 
 ```
-src/
-├── Main.gs             # Entry points, menu, triggers
-├── SheetSetup.gs       # Sheet creation and instructions
-├── LabelManager.gs     # Gmail label operations
-├── QueueProcessor.gs   # Email queue processing
-├── ConfigManager.gs    # Configuration management
-├── Logger.gs           # Logging utilities
-└── appsscript.json     # Apps Script manifest
-
-setup.sh                # Deployment script
+Email-sorter-for-Smart-Call-Time/
+├── setup.sh                    # Interactive setup script
+├── .clasp.json.template        # Template for clasp config
+├── README.md
+└── src/                        # ALL code lives here
+    ├── appsscript.json         # Apps Script manifest (permissions)
+    ├── Main.gs                 # Entry points, menu, triggers
+    ├── SheetSetup.gs           # Sheet creation and instructions
+    ├── LabelManager.gs         # Gmail label operations
+    ├── QueueProcessor.gs       # Email queue processing
+    ├── OutboundNotification.gs # Chat notifications to Flow
+    ├── ConfigManager.gs        # Configuration management
+    ├── Logger.gs               # Logging utilities
+    └── InboundChatWebhook.gs   # (placeholder for future)
 ```
+
+**Important:** The `.clasp.json` file is created inside `src/` and should NOT be committed to git. It contains your personal Script ID.
 
 ---
 
@@ -188,16 +194,40 @@ clasp pull          # Pull changes from Apps Script
 ## Troubleshooting
 
 ### "command not found: npm"
-Install Node.js first. See Step 2.
+Install Node.js first. See Prerequisites.
 
 ### "command not found: clasp"
 Run: `npm install -g @google/clasp`
+
+### "Project file already exists"
+You already have a `.clasp.json` in src/. Either delete it to create fresh, or use option 2 to push to existing project.
+
+### "A file with this name already exists: appsscript"
+Delete duplicate files. Make sure `appsscript.json` only exists in `src/`, not in root.
+
+### Memory error / "process out of memory"
+Node v25 has bugs. Either:
+```bash
+NODE_OPTIONS="--max-old-space-size=4096" clasp push
+```
+Or downgrade to Node v20.
+
+### "invalid_grant" or "reauth related error"
+Your login expired. Run:
+```bash
+clasp login
+```
 
 ### Menu not appearing in spreadsheet
 Refresh the page and wait a few seconds.
 
 ### Permission denied running setup.sh
 Run: `chmod +x setup.sh` then try again.
+
+### No message sent to Chat
+1. Check Config sheet has `chat_webhook_url` set
+2. Check Log sheet for `NOTIFY_SKIP` errors
+3. Run "Queue Unlabeled Emails" from menu (this triggers notifications)
 
 ---
 
