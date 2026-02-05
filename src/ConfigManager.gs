@@ -101,6 +101,130 @@ function deleteConfigValue(key) {
 }
 
 // ============================================================================
+// ALIAS FUNCTIONS
+// ============================================================================
+
+/**
+ * Alias for getConfigValue - used by other modules.
+ * @param {string} key - The configuration key
+ * @returns {string|null} The configuration value or null if not found
+ */
+function getConfig(key) {
+  return getConfigValue(key);
+}
+
+/**
+ * Alias for setConfigValue - used by other modules.
+ * @param {string} key - The configuration key
+ * @param {string} value - The value to set
+ */
+function setConfig(key, value) {
+  setConfigValue(key, value);
+}
+
+// ============================================================================
+// WEBHOOK CONFIG
+// ============================================================================
+
+/**
+ * Gets the webhook URL for this instance.
+ * @returns {string|null} The webhook URL
+ */
+function getWebhookUrl() {
+  return getConfigValue('webhook_url');
+}
+
+/**
+ * Sets the webhook URL for this instance.
+ * @param {string} url - The webhook URL
+ */
+function setWebhookUrl(url) {
+  setConfigValue('webhook_url', url);
+}
+
+/**
+ * Gets the Central Hub URL.
+ * @returns {string|null} The hub URL
+ */
+function getHubUrl() {
+  return getConfigValue('hub_url');
+}
+
+/**
+ * Sets the Central Hub URL.
+ * @param {string} url - The hub URL
+ */
+function setHubUrl(url) {
+  setConfigValue('hub_url', url);
+}
+
+/**
+ * Gets the instance name for this deployment.
+ * Auto-generates from user email if not set.
+ * @returns {string} The instance name
+ */
+function getInstanceName() {
+  let name = getConfigValue('instance_name');
+
+  if (!name) {
+    // Auto-generate from user email
+    const email = Session.getActiveUser().getEmail();
+    name = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '_');
+    setConfigValue('instance_name', name);
+  }
+
+  return name;
+}
+
+/**
+ * Registers this instance with the Central Hub.
+ * Called during setup or reconnect.
+ * @param {string} hubUrl - The Hub's web app URL
+ * @returns {Object} Registration result
+ */
+function registerWithHub(hubUrl) {
+  if (!hubUrl) {
+    return { success: false, error: 'No hub URL provided' };
+  }
+
+  const webhookUrl = getWebhookUrl();
+  if (!webhookUrl) {
+    return { success: false, error: 'Webhook URL not set. Deploy as web app first.' };
+  }
+
+  const instanceName = getInstanceName();
+  const email = Session.getActiveUser().getEmail();
+  const sheetId = SpreadsheetApp.getActive().getId();
+
+  try {
+    const response = UrlFetchApp.fetch(hubUrl, {
+      method: 'POST',
+      contentType: 'application/json',
+      payload: JSON.stringify({
+        action: 'register',
+        email: email,
+        sheetId: sheetId,
+        instanceName: instanceName,
+        webhookUrl: webhookUrl
+      }),
+      muteHttpExceptions: true
+    });
+
+    const result = JSON.parse(response.getContentText());
+
+    if (result.success) {
+      setHubUrl(hubUrl);
+      logAction('CONFIG', 'HUB_REGISTERED', `Registered with hub: ${instanceName}`);
+    }
+
+    return result;
+
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================================================
 // CONFIG DEFAULTS
 // ============================================================================
 
