@@ -65,8 +65,6 @@ Email-sorter-for-Smart-Call-Time/
 │   ├── ChatManager.gs          # Send messages to Chat space
 │   ├── HubSetup.gs             # Admin menu and setup
 │   └── README.md               # Hub-specific documentation
-│
-└── inbound-chat/               # (Legacy - for standalone chat handling)
 ```
 
 ---
