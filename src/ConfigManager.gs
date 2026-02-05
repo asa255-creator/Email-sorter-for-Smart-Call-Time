@@ -228,6 +228,58 @@ function registerWithHub(hubUrl) {
 // CONFIG DEFAULTS
 // ============================================================================
 
+// ============================================================================
+// HUB COMMUNICATION
+// ============================================================================
+
+/**
+ * Notifies the Hub that email processing is complete.
+ * Hub will delete related Chat messages and clean up pending request.
+ *
+ * @param {string} emailId - The email ID that was processed
+ * @returns {Object} Result from Hub
+ */
+function notifyHubComplete(emailId) {
+  const hubUrl = getHubUrl();
+  if (!hubUrl) {
+    logAction('CONFIG', 'HUB_NOTIFY_SKIP', 'No hub URL configured');
+    return { success: false, error: 'No hub URL configured' };
+  }
+
+  const instanceName = getInstanceName();
+
+  try {
+    const response = UrlFetchApp.fetch(hubUrl, {
+      method: 'POST',
+      contentType: 'application/json',
+      payload: JSON.stringify({
+        action: 'confirm_complete',
+        instanceName: instanceName,
+        emailId: emailId
+      }),
+      muteHttpExceptions: true
+    });
+
+    const result = JSON.parse(response.getContentText());
+
+    if (result.success) {
+      logAction(emailId, 'HUB_NOTIFIED', 'Processing complete sent to Hub');
+    } else {
+      logAction(emailId, 'HUB_NOTIFY_ERROR', result.error || 'Unknown error');
+    }
+
+    return result;
+
+  } catch (error) {
+    logAction(emailId, 'HUB_NOTIFY_ERROR', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================================================
+// CONFIG DEFAULTS
+// ============================================================================
+
 /**
  * Default configuration values.
  */

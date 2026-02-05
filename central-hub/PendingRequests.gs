@@ -107,6 +107,68 @@ function getPendingRequestForUser(instanceName) {
 }
 
 /**
+ * Gets a pending request by instance name and email ID.
+ * Used for cleanup when user confirms completion.
+ *
+ * @param {string} instanceName - User's instance name
+ * @param {string} emailId - Email ID that was processed
+ * @returns {Object|null} Pending request with messageNames or null
+ */
+function getPendingRequestByEmailId(instanceName, emailId) {
+  const sheet = getOrCreatePendingSheet();
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) return null;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][1] === instanceName && data[i][2] === emailId) {
+      const metadata = JSON.parse(data[i][5] || '{}');
+      return {
+        row: i + 2,
+        requestId: data[i][0],
+        instanceName: data[i][1],
+        emailId: data[i][2],
+        status: data[i][3],
+        createdAt: data[i][4],
+        metadata: metadata,
+        messageNames: metadata.messageNames || []
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Removes a pending request from the sheet.
+ * Called after cleanup is complete.
+ *
+ * @param {string} instanceName - User's instance name
+ * @param {string} emailId - Email ID that was processed
+ * @returns {boolean} True if found and removed
+ */
+function removePendingRequest(instanceName, emailId) {
+  const sheet = getOrCreatePendingSheet();
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) return false;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][1] === instanceName && data[i][2] === emailId) {
+      sheet.deleteRow(i + 2);
+      logHub('PENDING_REMOVED', `${instanceName}/${emailId}`);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Marks a pending request as completed.
  *
  * @param {string} requestId - Request ID

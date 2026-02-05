@@ -51,12 +51,19 @@ function onMessage(event) {
 
 /**
  * Handles the app being added to a space.
+ * Function name MUST match Google Cloud Console trigger: "onAddedToSpace"
  *
  * @param {Object} event - Chat event object
  * @returns {Object} Welcome message
  */
-function onAddToSpace(event) {
+function onAddedToSpace(event) {
   const spaceName = event.space.displayName || event.space.name;
+
+  // Auto-save the space ID for sending messages
+  if (event.space.name) {
+    setHubConfig('chat_space_id', event.space.name);
+    logHub('SPACE_ID_SAVED', event.space.name);
+  }
 
   logHub('ADDED_TO_SPACE', spaceName);
 
@@ -67,11 +74,30 @@ function onAddToSpace(event) {
 
 /**
  * Handles the app being removed from a space.
+ * Function name MUST match Google Cloud Console trigger: "onRemovedFromSpace"
  *
  * @param {Object} event - Chat event object
  */
-function onRemoveFromSpace(event) {
+function onRemovedFromSpace(event) {
   logHub('REMOVED_FROM_SPACE', event.space.name);
+}
+
+/**
+ * Handles slash commands (app commands).
+ * Function name MUST match Google Cloud Console trigger: "onAppCommand"
+ *
+ * @param {Object} event - Chat event object
+ * @returns {Object} Response message
+ */
+function onAppCommand(event) {
+  const commandId = event.message?.slashCommand?.commandId || 'unknown';
+
+  logHub('APP_COMMAND', `Command ID: ${commandId}`);
+
+  // Currently no slash commands configured - can add later
+  return {
+    text: 'No commands configured yet. Tag me with @instance_name: Label1, Label2 to route labels.'
+  };
 }
 
 // ============================================================================
@@ -104,8 +130,13 @@ function doPost(e) {
 
       case 'route_labels':
         // Direct API call to route labels (for testing or Flow integration)
-        const result = routeLabelsToUser(data.instanceName, data.labels, data.emailId);
-        return jsonResponse(result);
+        const routeResult = routeLabelsToUser(data.instanceName, data.labels, data.emailId);
+        return jsonResponse(routeResult);
+
+      case 'confirm_complete':
+        // User confirms labels were applied - clean up chat messages
+        const completeResult = handleConfirmComplete(data);
+        return jsonResponse(completeResult);
 
       default:
         return jsonResponse({ success: false, error: `Unknown action: ${action}` });
@@ -182,6 +213,53 @@ function handleUnregistration(data) {
 
   const result = unregisterUser(email || instanceName);
   return jsonResponse(result);
+}
+
+/**
+ * Handles confirmation that labels were applied.
+ * Deletes the related chat messages and removes the pending request.
+ *
+ * @param {Object} data - Completion data
+ * @param {string} data.instanceName - Instance that completed
+ * @param {string} data.emailId - Email ID that was processed
+ * @returns {Object} Result
+ */
+function handleConfirmComplete(data) {
+  const { instanceName, emailId } = data;
+
+  if (!instanceName || !emailId) {
+    return { success: false, error: 'Missing instanceName or emailId' };
+  }
+
+  try {
+    // Get the pending request to find message IDs
+    const pendingRequest = getPendingRequestByEmailId(instanceName, emailId);
+
+    if (!pendingRequest) {
+      logHub('CONFIRM_COMPLETE', `No pending request found for ${instanceName}/${emailId}`);
+      return { success: true, message: 'No pending request found (may already be cleaned up)' };
+    }
+
+    // Delete the chat messages
+    if (pendingRequest.messageNames && pendingRequest.messageNames.length > 0) {
+      const deleteResult = deleteChatMessages(pendingRequest.messageNames);
+      logHub('MESSAGES_DELETED', `${instanceName}: ${deleteResult.deleted} messages deleted`);
+    }
+
+    // Remove from pending sheet
+    removePendingRequest(instanceName, emailId);
+
+    logHub('CONFIRM_COMPLETE', `${instanceName}/${emailId} - cleaned up`);
+
+    return {
+      success: true,
+      message: 'Request completed and chat messages cleaned up'
+    };
+
+  } catch (error) {
+    logHub('CONFIRM_ERROR', `${instanceName}/${emailId}: ${error.message}`);
+    return { success: false, error: error.message };
+  }
 }
 
 // ============================================================================
