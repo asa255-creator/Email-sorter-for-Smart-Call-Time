@@ -1,67 +1,265 @@
-# Smart Call Time - Flow Integrator
+# Smart Call Time - Email Sorter
 
-A Google Workspace integration for sorting emails using Google Flows + AI.
+A Google Workspace integration for sorting emails using Google Flows + AI with multi-user support via Central Hub.
 
-## Features
+## Architecture
 
-- Automatically sort Gmail emails into labels using Google Flows + AI
-- Flow reads labels dynamically from spreadsheet (no hardcoding)
-- Queue processes emails one at a time (Processing/Pending status)
-- Full email context provided for old emails
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              CENTRAL HUB                                   │
+│                    (Single deployment for all users)                       │
+│                                                                            │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                   │
+│   │ UserRegistry│    │MessageRouter│    │ ChatManager │                   │
+│   └─────────────┘    └─────────────┘    └─────────────┘                   │
+│                              │                                             │
+└──────────────────────────────┼─────────────────────────────────────────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          │                    │                    │
+          ▼                    ▼                    ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│   USER SHEET A  │  │   USER SHEET B  │  │   USER SHEET C  │
+│                 │  │                 │  │                 │
+│ ┌─────────────┐ │  │ ┌─────────────┐ │  │ ┌─────────────┐ │
+│ │QueueProcess │ │  │ │QueueProcess │ │  │ │QueueProcess │ │
+│ │LabelManager │ │  │ │LabelManager │ │  │ │LabelManager │ │
+│ │InboundHook  │ │  │ │InboundHook  │ │  │ │InboundHook  │ │
+│ └─────────────┘ │  │ └─────────────┘ │  │ └─────────────┘ │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+```
+
+**Flow:**
+1. User's sheet sends email to Hub → Hub forwards to Chat space for AI
+2. AI responds with labels → Hub routes to user's webhook
+3. User's sheet applies labels to email
 
 ---
 
-## First-Time Setup
+## Project Structure
 
-### Prerequisites
+```
+Email-sorter-for-Smart-Call-Time/
+├── setup.sh                    # Interactive setup script (user instances)
+├── README.md                   # This file
+│
+├── src/                        # USER INSTANCE CODE
+│   ├── appsscript.json         # Manifest (permissions, webapp config)
+│   ├── Main.gs                 # Entry points, menu, triggers
+│   ├── SheetSetup.gs           # Sheet creation and instructions
+│   ├── LabelManager.gs         # Gmail label operations
+│   ├── QueueProcessor.gs       # Email queue processing
+│   ├── OutboundNotification.gs # Send emails to Chat for AI
+│   ├── InboundWebhook.gs       # Receive labels from Hub
+│   ├── ConfigManager.gs        # Configuration management
+│   └── Logger.gs               # Logging utilities
+│
+├── central-hub/                # CENTRAL HUB CODE
+│   ├── appsscript.json         # Manifest (Chat app + webapp)
+│   ├── HubMain.gs              # Entry points (doPost, doGet, onMessage)
+│   ├── UserRegistry.gs         # User registration/management
+│   ├── MessageRouter.gs        # Parse messages, route to users
+│   ├── PendingRequests.gs      # Track requests awaiting AI response
+│   ├── ChatManager.gs          # Send messages to Chat space
+│   ├── HubSetup.gs             # Admin menu and setup
+│   └── README.md               # Hub-specific documentation
+│
+└── inbound-chat/               # (Legacy - for standalone chat handling)
+```
 
-1. **Install Node.js** (use v20 LTS, NOT v25 which has memory bugs):
-   - Mac: `brew install node@20`
-   - Windows: Download from https://nodejs.org/ (LTS version)
+---
 
-2. **Install clasp:**
+# INSTALLATION
+
+## Prerequisites
+
+1. **Node.js** (use v20 LTS, NOT v25 which has memory bugs):
    ```bash
-   npm install -g @google/clasp
+   # Mac
+   brew install node@20
+
+   # Windows - download from https://nodejs.org/ (LTS version)
    ```
 
-3. **Clone the repo:**
+2. **Clasp CLI**:
+   ```bash
+   npm install -g @google/clasp
+   clasp login
+   ```
+
+3. **Clone the repository**:
    ```bash
    git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git
    cd Email-sorter-for-Smart-Call-Time
    ```
 
-### Option A: Create NEW Google Sheet (first time)
+---
 
-```bash
-./setup.sh
-```
+## Part 1: Deploy the Central Hub (One-Time Setup)
 
-Choose option 1, then:
-1. Open the spreadsheet URL
-2. Refresh the page
-3. Click **Smart Call Time > Email Sorter > Setup**
-4. Grant permissions when prompted
+The Central Hub is deployed ONCE and shared by all users.
 
-### Option B: Push to EXISTING Apps Script project
+### Step 1: Create Hub Google Sheet
 
-1. Get your Script ID from: Apps Script Editor > Project Settings > Script ID
+1. Go to [sheets.new](https://sheets.new) and create a new spreadsheet
+2. Name it "Smart Call Time Hub"
+3. Note the Sheet ID from the URL: `https://docs.google.com/spreadsheets/d/SHEET_ID_HERE/edit`
 
-2. Create `.clasp.json` in the `src/` folder:
-   ```bash
-   cd src
-   echo '{"scriptId":"YOUR_SCRIPT_ID_HERE","rootDir":"."}' > .clasp.json
-   ```
+### Step 2: Create Hub Apps Script Project
 
-3. Push the code:
-   ```bash
-   clasp push
-   ```
+1. In the spreadsheet, click **Extensions > Apps Script**
+2. Delete the default `Code.gs` content
+3. Create each file and copy content from `central-hub/`:
+
+| File to Create | Copy From |
+|---------------|-----------|
+| HubMain.gs | central-hub/HubMain.gs |
+| UserRegistry.gs | central-hub/UserRegistry.gs |
+| MessageRouter.gs | central-hub/MessageRouter.gs |
+| PendingRequests.gs | central-hub/PendingRequests.gs |
+| ChatManager.gs | central-hub/ChatManager.gs |
+| HubSetup.gs | central-hub/HubSetup.gs |
+
+4. Replace `appsscript.json` content (click gear icon > Show manifest):
+   - Copy content from `central-hub/appsscript.json`
+
+### Step 3: Deploy Hub as Web App
+
+1. Click **Deploy > New deployment**
+2. Click gear icon > **Web app**
+3. Configure:
+   - Execute as: **Me**
+   - Who has access: **Anyone**
+4. Click **Deploy**
+5. Copy the **Web app URL** - this is your `HUB_URL`
+
+### Step 4: Configure Hub Sheets
+
+1. Back in the spreadsheet, refresh the page
+2. Click **Hub Admin > Run Initial Setup**
+3. Grant permissions when prompted
+
+### Step 5: Set Up Chat Webhook (For Outbound Messages)
+
+1. Open Google Chat
+2. Create or open a space for AI categorization
+3. Click space name > **Integrations** > **Webhooks** > **Add webhook**
+4. Name: "Email Sorter Hub"
+5. Copy the webhook URL
+6. In Hub spreadsheet: **Hub Admin > Configure Chat Webhook**
+7. Paste the webhook URL
+
+### Step 6: (Optional) Deploy as Chat App
+
+To receive AI responses directly via Chat app:
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com)
+2. Create or select a project
+3. Enable the **Google Chat API**
+4. Configure Chat API:
+   - App name: Smart Call Time Hub
+   - Avatar URL: (optional)
+   - Description: Routes AI email labels to user sheets
+   - Functionality: Check "Receive 1:1 messages" and "Join spaces"
+   - Connection settings: Apps Script project
+   - Script ID: (from Apps Script > Project Settings)
+5. Save and wait for propagation
 
 ---
 
-## Updating Code After Changes
+## Part 2: Deploy User Instance
 
-If you already have this set up and want to push updated code:
+Each user runs this setup to create their own sheet and connect to the Hub.
+
+### Option A: Automated Setup (Recommended)
+
+```bash
+cd Email-sorter-for-Smart-Call-Time
+
+# Set the Hub URL (get from Hub administrator)
+export HUB_URL="https://script.google.com/macros/s/YOUR_HUB_DEPLOY_ID/exec"
+
+# Run setup
+./setup.sh
+```
+
+Choose from the menu:
+1. **Create NEW Google Sheet** - First time setup
+2. **Push to EXISTING Apps Script** - Update existing project
+3. **Reconnect & redeploy webhook** - Re-register with Hub
+
+The setup will:
+- Create your Google Sheet with all required tabs
+- Push the code to Apps Script
+- Deploy as web app (for receiving labels from Hub)
+- Register your webhook with the Central Hub
+
+### Option B: Manual Setup
+
+1. Create a new Google Sheet
+2. Open **Extensions > Apps Script**
+3. Get Script ID from **Project Settings**
+4. Create `.clasp.json` in `src/` folder:
+   ```bash
+   cd src
+   echo '{"scriptId":"YOUR_SCRIPT_ID","rootDir":"."}' > .clasp.json
+   clasp push
+   ```
+5. In spreadsheet: Click **Smart Call Time > Email Sorter > Setup**
+6. Deploy as web app and register with Hub manually
+
+### Reconnecting to Hub
+
+If you need to re-register with the Hub:
+
+```bash
+./setup.sh --reconnect
+```
+
+Or from the menu, choose option 3.
+
+---
+
+## Part 3: Configure Google Flow
+
+### Create Flow for New Emails
+
+1. Go to [Google Flows](https://flows.google.com)
+2. Create new Flow: "Email Categorizer"
+3. Trigger: **When a new email arrives in Gmail**
+4. Add action: **Get email labels** (read Labels sheet from your spreadsheet)
+5. Add action: **AI analysis** with prompt:
+
+```
+You are an email categorizer. Based on the email content below, select the most appropriate labels from the available options.
+
+AVAILABLE LABELS:
+{{labels_from_sheet}}
+
+EMAIL:
+Subject: {{email.subject}}
+From: {{email.from}}
+Body: {{email.body}}
+
+Respond with ONLY the label names, comma-separated. Example: "Work, Important"
+```
+
+6. Add action: **Send message to Google Chat**
+   - Use the Hub's Chat space
+   - Include instance_name in message so Hub knows where to route
+
+### Create Flow for Old Emails (Queue Processing)
+
+1. Trigger: **When spreadsheet row changes** (Status column = "Processing")
+2. Read the Context column for full email content
+3. Same AI analysis step
+4. Send to Chat with instance_name
+
+---
+
+## Updating Code
+
+After pulling updates from GitHub:
 
 ```bash
 cd Email-sorter-for-Smart-Call-Time
@@ -70,164 +268,205 @@ cd src
 clasp push
 ```
 
-**If you get memory errors** (Node v25 bug):
+**Memory error fix** (Node v25 bug):
 ```bash
-NODE_OPTIONS="--max-old-space-size=4096" clasp push
-```
-
-Or downgrade to Node v20:
-```bash
-brew install node@20
-brew unlink node
-brew link node@20
+NODE_OPTIONS="--max-old-space-size=8192" clasp push
 ```
 
 ---
 
-## Switching Google Accounts
+## Sheets Reference
 
-```bash
-clasp logout
-clasp login
-```
-
----
-
-## Project Structure
-
-```
-Email-sorter-for-Smart-Call-Time/
-├── setup.sh                    # Interactive setup script
-├── .clasp.json.template        # Template for clasp config
-├── README.md
-└── src/                        # ALL code lives here
-    ├── appsscript.json         # Apps Script manifest (permissions)
-    ├── Main.gs                 # Entry points, menu, triggers
-    ├── SheetSetup.gs           # Sheet creation and instructions
-    ├── LabelManager.gs         # Gmail label operations
-    ├── QueueProcessor.gs       # Email queue processing
-    ├── OutboundNotification.gs # Chat notifications to Flow
-    ├── ConfigManager.gs        # Configuration management
-    ├── Logger.gs               # Logging utilities
-    └── InboundChatWebhook.gs   # (placeholder for future)
-```
-
-**Important:** The `.clasp.json` file is created inside `src/` and should NOT be committed to git. It contains your personal Script ID.
-
----
-
-## How It Works
-
-```
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   Google Flow    │────▶│  Google Sheets   │────▶│   Apps Script    │
-│  (AI Selection)  │     │  (Labels/Queue)  │     │ (Apply Labels)   │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
-```
-
-### New Emails
-1. Flow triggers on new Gmail arrival
-2. Flow reads **Labels** sheet for available labels
-3. Flow uses AI to select labels
-4. Flow adds row to **Queue** with Status = "Processing"
-5. Script applies labels and deletes the row
-
-### Old Emails (Queue)
-1. Menu: **Queue Unlabeled Emails** (adds emails with Context filled)
-2. First row gets Status = "Processing"
-3. Flow triggers on "Processing" row, reads Context column
-4. Flow writes labels to "Labels to Apply" column
-5. Script applies labels, deletes row, promotes next to "Processing"
-6. This triggers Flow again for next email
-
----
-
-## Sheets Created
+### User Instance Sheets
 
 | Sheet | Purpose |
 |-------|---------|
-| **Instructions** | Setup guide, Flow instructions, AI prompts |
-| **Labels** | Gmail labels with Description column for AI context |
-| **Queue** | Email processing queue with Context column |
+| **Instructions** | Setup guide, Flow instructions |
+| **Labels** | Gmail labels with descriptions for AI |
+| **Queue** | Email processing queue |
 | **Config** | Settings (hidden) |
 | **Log** | Processing history |
 
----
+### Queue Columns
 
-## Queue Columns
-
-| Column | Purpose |
+| Column | Content |
 |--------|---------|
-| A: Email ID | Gmail message ID |
-| B: Subject | Email subject |
-| C: From | Sender |
-| D: Date | Email date |
-| E: Labels to Apply | Flow fills this |
-| F: Status | "Processing" / "Pending" / "Error" |
-| G: Processed At | Timestamp |
-| H: Context | Full email content (for old emails) |
+| A | Email ID |
+| B | Subject |
+| C | From |
+| D | Date |
+| E | Labels to Apply (from AI) |
+| F | Status (Processing/Pending/Error) |
+| G | Processed At |
+| H | Context (full email for old emails) |
+
+### Hub Sheets
+
+| Sheet | Purpose |
+|-------|---------|
+| **Registry** | Registered user instances |
+| **Pending** | Requests waiting for AI |
+| **HubConfig** | Hub settings |
+| **HubLog** | Activity log |
 
 ---
 
 ## Menu Options
 
-| Menu | Action |
-|------|--------|
+### User Instance Menu
+
+| Menu Item | Action |
+|-----------|--------|
 | Setup / Refresh | Initialize sheets and sync labels |
-| Sync Labels Now | Refresh Gmail labels |
+| Sync Labels Now | Refresh Gmail labels list |
 | Queue Unlabeled Emails | Add unlabeled emails to queue |
 | Process All Pending | Manually process queued items |
 | Clear Queue | Clear the queue |
+
+### Hub Admin Menu
+
+| Menu Item | Action |
+|-----------|--------|
+| Run Initial Setup | Create Hub sheets |
+| Configure Chat Webhook | Set outbound webhook URL |
+| View Registered Users | Show all users |
+| Test Chat Connection | Send test message |
+| Test Route to User | Test webhook routing |
+
+---
+
+## API Reference
+
+### User Webhook Endpoints
+
+**POST /** - Receive labels from Hub
+```json
+{
+  "action": "update_labels",
+  "emailId": "abc123",
+  "labels": "Work, Important"
+}
+```
+
+**GET /** - Status check
+
+### Hub Endpoints
+
+**POST / action=register** - Register user instance
+```json
+{
+  "action": "register",
+  "email": "user@example.com",
+  "instanceName": "myinstance",
+  "webhookUrl": "https://script.google.com/macros/s/.../exec"
+}
+```
+
+**POST / action=route_labels** - Route labels to user
+```json
+{
+  "action": "route_labels",
+  "instanceName": "myinstance",
+  "labels": "Work, Important",
+  "emailId": "abc123"
+}
+```
+
+**GET /** - Hub status
+
+---
+
+## Troubleshooting
+
+### Setup Issues
+
+| Problem | Solution |
+|---------|----------|
+| "command not found: npm" | Install Node.js first |
+| "command not found: clasp" | Run `npm install -g @google/clasp` |
+| "Project file already exists" | Delete `.clasp.json` in src/ or use option 2 |
+| Memory error | Run: `NODE_OPTIONS="--max-old-space-size=8192" clasp push` |
+| "invalid_grant" error | Run `clasp login` |
+| Menu not appearing | Refresh the spreadsheet page |
+| Permission denied (setup.sh) | Run `chmod +x setup.sh` |
+
+### Processing Issues
+
+| Problem | Solution |
+|---------|----------|
+| Queue not processing | Check if Labels column has values; check Status = "Processing" |
+| Multiple Processing rows stuck | Fixed in latest code - processes all ready rows |
+| Labels not appearing | Check Hub connection; verify webhook URL is registered |
+| Chat messages not sending | Verify chat_webhook_url in Config sheet |
+
+### Hub Issues
+
+| Problem | Solution |
+|---------|----------|
+| Users can't register | Check Hub is deployed with "Anyone" access |
+| Messages not routing | Check Registry sheet has user entry |
+| AI responses lost | Check Pending sheet; verify Chat app is receiving |
+
+---
+
+## Code Architecture
+
+Both codebases follow atomic/modular design:
+
+### User Instance (src/)
+
+| Module | Responsibility |
+|--------|---------------|
+| Main.gs | Entry points, menu creation, trigger setup |
+| SheetSetup.gs | Create and configure sheets |
+| LabelManager.gs | Gmail label CRUD operations |
+| QueueProcessor.gs | Queue state machine, email processing |
+| OutboundNotification.gs | Send to Chat for AI processing |
+| InboundWebhook.gs | Receive labels from Hub |
+| ConfigManager.gs | Read/write configuration |
+| Logger.gs | Logging to sheet |
+
+### Central Hub (central-hub/)
+
+| Module | Responsibility |
+|--------|---------------|
+| HubMain.gs | Entry points (doPost, doGet, onMessage) |
+| UserRegistry.gs | User CRUD, lookup by instance name |
+| MessageRouter.gs | Parse AI responses, route to user webhooks |
+| PendingRequests.gs | Track requests, handle timeouts |
+| ChatManager.gs | Send messages to Chat space |
+| HubSetup.gs | Admin menu, initial setup |
 
 ---
 
 ## Development
 
 ```bash
-clasp push          # Push changes to Apps Script
-clasp push --watch  # Watch and auto-push
-clasp pull          # Pull changes from Apps Script
+# Push changes to user instance
+cd src && clasp push
+
+# Watch mode (auto-push on save)
+clasp push --watch
+
+# Pull changes from Apps Script
+clasp pull
 ```
 
----
+### Testing Webhooks
 
-## Troubleshooting
-
-### "command not found: npm"
-Install Node.js first. See Prerequisites.
-
-### "command not found: clasp"
-Run: `npm install -g @google/clasp`
-
-### "Project file already exists"
-You already have a `.clasp.json` in src/. Either delete it to create fresh, or use option 2 to push to existing project.
-
-### "A file with this name already exists: appsscript"
-Delete duplicate files. Make sure `appsscript.json` only exists in `src/`, not in root.
-
-### Memory error / "process out of memory"
-Node v25 has bugs. Either:
+Test user webhook:
 ```bash
-NODE_OPTIONS="--max-old-space-size=4096" clasp push
+curl -X POST "YOUR_WEBHOOK_URL" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"ping"}'
 ```
-Or downgrade to Node v20.
 
-### "invalid_grant" or "reauth related error"
-Your login expired. Run:
+Test Hub:
 ```bash
-clasp login
+curl -X POST "HUB_URL" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"ping"}'
 ```
-
-### Menu not appearing in spreadsheet
-Refresh the page and wait a few seconds.
-
-### Permission denied running setup.sh
-Run: `chmod +x setup.sh` then try again.
-
-### No message sent to Chat
-1. Check Config sheet has `chat_webhook_url` set
-2. Check Log sheet for `NOTIFY_SKIP` errors
-3. Run "Queue Unlabeled Emails" from menu (this triggers notifications)
 
 ---
 
