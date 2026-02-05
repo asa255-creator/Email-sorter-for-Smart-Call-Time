@@ -3,29 +3,12 @@
  *
  * Manages sending messages to the shared Chat space.
  * Used to forward email content to AI for categorization.
- */
-
-// ============================================================================
-// CHAT SPACE CONFIGURATION
-// ============================================================================
-
-/**
- * Gets the configured Chat space webhook URL.
  *
- * @returns {string|null} Chat webhook URL
+ * Dependencies:
+ *   - HubConfig.gs: getChatWebhookUrl(), getHubConfig(), setHubConfig()
+ *   - PendingRequests.gs: createPendingRequest()
+ *   - HubMain.gs: logHub()
  */
-function getChatWebhookUrl() {
-  return getHubConfig('chat_webhook_url');
-}
-
-/**
- * Sets the Chat space webhook URL.
- *
- * @param {string} url - Webhook URL
- */
-function setChatWebhookUrl(url) {
-  setHubConfig('chat_webhook_url', url);
-}
 
 // ============================================================================
 // MESSAGE SENDING
@@ -155,60 +138,4 @@ function sendStatusToChat(message) {
   } catch (error) {
     return { success: false, error: error.message };
   }
-}
-
-// ============================================================================
-// HUB CONFIG HELPERS
-// ============================================================================
-
-/**
- * Gets a hub configuration value.
- *
- * @param {string} key - Config key
- * @returns {string|null} Config value
- */
-function getHubConfig(key) {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('HubConfig');
-
-  if (!sheet) return null;
-
-  const data = sheet.getDataRange().getValues();
-
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === key) {
-      return data[i][1];
-    }
-  }
-
-  return null;
-}
-
-/**
- * Sets a hub configuration value.
- *
- * @param {string} key - Config key
- * @param {string} value - Config value
- */
-function setHubConfig(key, value) {
-  const ss = SpreadsheetApp.getActive();
-  let sheet = ss.getSheetByName('HubConfig');
-
-  if (!sheet) {
-    sheet = ss.insertSheet('HubConfig');
-    sheet.getRange(1, 1, 1, 2).setValues([['Key', 'Value']]);
-    sheet.setFrozenRows(1);
-    sheet.getRange(1, 1, 1, 2).setFontWeight('bold');
-  }
-
-  const data = sheet.getDataRange().getValues();
-
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === key) {
-      sheet.getRange(i + 1, 2).setValue(value);
-      return;
-    }
-  }
-
-  sheet.appendRow([key, value]);
 }
