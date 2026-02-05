@@ -1,6 +1,8 @@
 # Local clasp config (contains personal Script ID)
 .clasp.json
 src/.clasp.json
+central-hub/.clasp.json
+inbound-chat/.clasp.json
 
 # Node
 node_modules/
