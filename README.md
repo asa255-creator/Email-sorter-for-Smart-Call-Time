@@ -40,7 +40,7 @@ A Google Workspace integration for sorting emails using Google Flows + AI with m
 
 ```
 Email-sorter-for-Smart-Call-Time/
-├── setup.sh                    # Interactive setup script (user instances)
+├── setup.sh                    # UNIFIED setup script (handles both User & Hub)
 ├── README.md                   # This file
 │
 ├── src/                        # USER INSTANCE CODE
@@ -55,7 +55,6 @@ Email-sorter-for-Smart-Call-Time/
 │   └── Logger.gs               # Logging utilities
 │
 ├── central-hub/                # CENTRAL HUB CODE
-│   ├── setup.sh                # Hub setup script (run this!)
 │   ├── appsscript.json         # Manifest (Chat app + webapp)
 │   ├── HubMain.gs              # Entry points (doPost, doGet, onMessage)
 │   ├── HubConfig.gs            # Configuration management
@@ -95,24 +94,36 @@ Email-sorter-for-Smart-Call-Time/
 
 ---
 
+## Quick Start
+
+The unified setup script handles both Hub and User Instance deployments:
+
+```bash
+cd Email-sorter-for-Smart-Call-Time
+./setup.sh
+```
+
+You'll be asked:
+1. **What are you setting up?** → User Instance or Central Hub
+2. **What would you like to do?** → Create new, Update existing, or Switch account
+
+---
+
 ## Part 1: Deploy the Central Hub (One-Time Setup)
 
 The Central Hub is deployed ONCE and shared by all users.
 
-### Option A: Automated Setup (Recommended)
+### Automated Setup
 
 ```bash
-cd Email-sorter-for-Smart-Call-Time/central-hub
 ./setup.sh
 ```
 
-Choose from the menu:
-1. **Create NEW Hub** - Creates Google Sheet + Apps Script, deploys web app
-2. **Push to EXISTING project** - Connect to existing Apps Script
-3. **Deploy/Update web app** - Redeploy only
-4. **Configure Chat space ID** - Set up auto-invites
+1. Choose **"Central Hub"** when asked what you're setting up
+2. Choose **"Create NEW project"**
+3. The script will create a Google Sheet, push code, and deploy
 
-The setup will output your **HUB_URL** - save this for users!
+**Save the Hub URL** that's displayed at the end - users need this!
 
 ### Option B: Manual Setup
 
@@ -177,25 +188,9 @@ To receive AI responses directly via Chat app:
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
 2. Create or select a project
 3. Enable the **Google Chat API**
-4. Configure Chat API settings:
-   - App name: Smart Call Time Hub
-   - Functionality: "Receive 1:1 messages" and "Join spaces"
-   - Connection settings: Apps Script project
-   - Script ID: (from Apps Script > Project Settings)
-5. Save and wait for propagation
-
-### Step 6: (Optional) Deploy as Chat App
-
-To receive AI responses directly via Chat app:
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create or select a project
-3. Enable the **Google Chat API**
 4. Configure Chat API:
    - App name: Smart Call Time Hub
-   - Avatar URL: (optional)
-   - Description: Routes AI email labels to user sheets
-   - Functionality: Check "Receive 1:1 messages" and "Join spaces"
+   - Functionality: "Receive 1:1 messages" and "Join spaces"
    - Connection settings: Apps Script project
    - Script ID: (from Apps Script > Project Settings)
 5. Save and wait for propagation
@@ -206,30 +201,22 @@ To receive AI responses directly via Chat app:
 
 Each user runs this setup to create their own sheet and connect to the Hub.
 
-### Option A: Automated Setup (Recommended)
+### Automated Setup
 
 ```bash
-cd Email-sorter-for-Smart-Call-Time
-
-# Set the Hub URL (get from Hub administrator)
-export HUB_URL="https://script.google.com/macros/s/YOUR_HUB_DEPLOY_ID/exec"
-
-# Run setup
 ./setup.sh
 ```
 
-Choose from the menu:
-1. **Create NEW Google Sheet** - First time setup
-2. **Push to EXISTING Apps Script** - Update existing project
-3. **Reconnect & redeploy webhook** - Re-register with Hub
+1. Choose **"User Instance"** when asked what you're setting up
+2. Choose **"Create NEW project"** (or "Update existing" if reconnecting)
+3. Follow the prompts
 
 The setup will:
 - Create your Google Sheet with all required tabs
 - Push the code to Apps Script
-- Deploy as web app (for receiving labels from Hub)
-- Register your webhook with the Central Hub
+- Deploy as web app
 
-### Option B: Manual Setup
+### Manual Setup (Alternative)
 
 1. Create a new Google Sheet
 2. Open **Extensions > Apps Script**
@@ -441,6 +428,31 @@ NODE_OPTIONS="--max-old-space-size=8192" clasp push
 | Users can't register | Check Hub is deployed with "Anyone" access |
 | Messages not routing | Check Registry sheet has user entry |
 | AI responses lost | Check Pending sheet; verify Chat app is receiving |
+
+### Fresh Start
+
+If you need to completely start over with local configuration:
+
+```bash
+./setup.sh --clean
+```
+
+This removes:
+- `src/.clasp.json` (user instance config)
+- `central-hub/.clasp.json` (hub config)
+- `central-hub/.hub_url` (saved hub URL)
+- `~/.clasp.json` (stray clasp config in home directory)
+
+**Note:** This does NOT delete your Google Sheets or Apps Script projects - only local configuration files.
+
+To also delete the local repository and re-clone:
+```bash
+cd ..
+rm -rf Email-sorter-for-Smart-Call-Time
+git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git
+cd Email-sorter-for-Smart-Call-Time
+./setup.sh
+```
 
 ---
 
