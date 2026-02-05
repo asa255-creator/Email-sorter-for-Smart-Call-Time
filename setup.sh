@@ -1,422 +1,500 @@
 #!/bin/bash
-# Smart Call Time - Setup Script
-# This script deploys the code to Google Apps Script using clasp
+
+# ============================================================================
+# Smart Call Time - Unified Setup Script
+# ============================================================================
+# Handles both User Instance and Central Hub deployments
+#
+# Usage:
+#   ./setup.sh           # Interactive menu
+#   ./setup.sh --clean   # Remove local config and start fresh
+# ============================================================================
 
 set -e
 
-# Configuration
-HUB_URL="${HUB_URL:-}"  # Set this to your Hub's web app URL after deploying
-
-echo "============================================"
-echo "  Smart Call Time - Setup Script"
-echo "============================================"
-echo ""
-
-# Get the directory where this script lives (the repo root)
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-SRC_DIR="$SCRIPT_DIR/src"
-
-# Always pull latest code from GitHub
-echo "Pulling latest code from GitHub..."
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-git pull origin main 2>/dev/null || git pull 2>/dev/null || echo "Warning: Could not pull latest code. Continuing with local version."
-echo ""
 
-# Validate we're in the right place
-if [ ! -d "$SRC_DIR" ]; then
-    echo "ERROR: Cannot find src/ directory."
-    echo "Make sure you're running this from the repo root."
-    exit 1
-fi
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-if [ ! -f "$SRC_DIR/appsscript.json" ]; then
-    echo "ERROR: Cannot find src/appsscript.json"
-    echo "The repository structure appears corrupted."
-    exit 1
-fi
-
-# Check for nested clone (common mistake)
-if [ -d "$SCRIPT_DIR/Email-sorter-for-Smart-Call-Time" ]; then
-    echo "ERROR: Found nested clone of repository!"
-    echo ""
-    echo "You have 'Email-sorter-for-Smart-Call-Time/' inside your repo."
-    echo "This causes duplicate files. Delete it with:"
-    echo ""
-    echo "  rm -rf \"$SCRIPT_DIR/Email-sorter-for-Smart-Call-Time\""
-    echo ""
-    exit 1
-fi
-
-# Clean up any stray .clasp.json in root (should only be in src/)
-if [ -f "$SCRIPT_DIR/.clasp.json" ]; then
-    echo "Removing stray .clasp.json from root directory..."
-    rm -f "$SCRIPT_DIR/.clasp.json"
-fi
-
-# Check Node version - v25 has memory bugs with clasp
-NODE_VERSION=$(node -v 2>/dev/null | cut -d'.' -f1 | tr -d 'v')
-if [ "$NODE_VERSION" == "25" ]; then
-    echo "WARNING: Node v25 has known memory bugs with clasp."
-    echo ""
-    echo "Recommended: Downgrade to Node v20 LTS:"
-    echo "  brew unlink node"
-    echo "  brew install node@20"
-    echo "  brew link --overwrite node@20"
-    echo ""
-    echo "Attempting to continue with memory workaround..."
-    echo ""
-fi
-
-# Fix Node v25 memory bug - use maximum heap size
+# Fix Node.js v25 memory issues
 export NODE_OPTIONS="--max-old-space-size=8192"
 
-# Check if npm is installed
-if ! command -v npm &> /dev/null; then
-    echo "ERROR: npm is not installed."
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+print_header() {
+    clear
     echo ""
-    echo "Please install Node.js first:"
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║         Smart Call Time - Setup Script                     ║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "  Mac:     brew install node@20"
-    echo "  Windows: Download LTS from https://nodejs.org/"
-    echo ""
-    exit 1
-fi
+}
 
-# Check if clasp is installed
-if ! command -v clasp &> /dev/null; then
-    echo "Installing clasp (Google Apps Script CLI)..."
-    npm install -g @google/clasp
-    echo ""
-fi
+print_success() { echo -e "${GREEN}✓ $1${NC}"; }
+print_error() { echo -e "${RED}✗ $1${NC}"; }
+print_warning() { echo -e "${YELLOW}! $1${NC}"; }
+print_info() { echo -e "${BLUE}→ $1${NC}"; }
 
-# Function to deploy as web app
-deploy_webapp() {
-    echo ""
-    echo "Deploying as web app..."
+# ============================================================================
+# PULL LATEST CODE
+# ============================================================================
 
-    cd "$SRC_DIR"
+pull_latest() {
+    print_info "Checking for updates..."
 
-    # Check for existing deployments
-    EXISTING_DEPLOYS=$(clasp deployments 2>/dev/null | grep -c "web app" || echo "0")
+    if [ -d ".git" ]; then
+        # Fetch and show status
+        git fetch origin 2>/dev/null || true
 
-    if [ "$EXISTING_DEPLOYS" != "0" ]; then
-        echo ""
-        echo "Found existing web app deployment(s)."
-        clasp deployments
-        echo ""
-        read -p "Create NEW deployment or use existing? (new/existing): " deploy_choice
+        # Try to get current branch
+        CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 
-        if [ "$deploy_choice" == "existing" ]; then
-            # Get the existing deployment URL
-            DEPLOY_ID=$(clasp deployments 2>/dev/null | grep "@" | head -1 | awk '{print $2}')
-            if [ -n "$DEPLOY_ID" ]; then
-                WEBHOOK_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
-                echo "Using existing deployment: $WEBHOOK_URL"
-            else
-                echo "Could not find deployment ID. Creating new deployment..."
-                DEPLOY_OUTPUT=$(clasp deploy --description "Email Sorter Webhook" 2>&1)
-                echo "$DEPLOY_OUTPUT"
-                DEPLOY_ID=$(echo "$DEPLOY_OUTPUT" | grep -o 'AKfycb[a-zA-Z0-9_-]*' | head -1)
-                WEBHOOK_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
+        # Check for updates
+        LOCAL=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+        REMOTE=$(git rev-parse "origin/$CURRENT_BRANCH" 2>/dev/null || echo "unknown")
+
+        if [ "$LOCAL" != "$REMOTE" ] && [ "$REMOTE" != "unknown" ]; then
+            print_warning "Updates available on $CURRENT_BRANCH"
+            read -p "Pull latest code? (y/n): " PULL_CHOICE
+            if [ "$PULL_CHOICE" = "y" ] || [ "$PULL_CHOICE" = "Y" ]; then
+                if git pull origin "$CURRENT_BRANCH" 2>/dev/null; then
+                    print_success "Updated to latest"
+                else
+                    print_warning "Could not pull (continuing with local)"
+                fi
             fi
         else
-            # Create new deployment
-            DEPLOY_OUTPUT=$(clasp deploy --description "Email Sorter Webhook" 2>&1)
-            echo "$DEPLOY_OUTPUT"
-            DEPLOY_ID=$(echo "$DEPLOY_OUTPUT" | grep -o 'AKfycb[a-zA-Z0-9_-]*' | head -1)
-            WEBHOOK_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
+            print_success "Code is up to date"
         fi
     else
-        # No existing deployments, create new
-        DEPLOY_OUTPUT=$(clasp deploy --description "Email Sorter Webhook" 2>&1)
-        echo "$DEPLOY_OUTPUT"
-        DEPLOY_ID=$(echo "$DEPLOY_OUTPUT" | grep -o 'AKfycb[a-zA-Z0-9_-]*' | head -1)
-        WEBHOOK_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
+        print_warning "Not a git repo - skipping update check"
     fi
-
-    if [ -z "$WEBHOOK_URL" ] || [ "$WEBHOOK_URL" == "https://script.google.com/macros/s//exec" ]; then
-        echo ""
-        echo "WARNING: Could not automatically get webhook URL."
-        echo "Please manually deploy as web app in Apps Script editor:"
-        echo "  1. Open script in browser: clasp open"
-        echo "  2. Deploy > New deployment > Web app"
-        echo "  3. Copy the URL"
-        echo ""
-        read -p "Enter your webhook URL (or press Enter to skip): " WEBHOOK_URL
-    fi
-
     echo ""
-    echo "Webhook URL: $WEBHOOK_URL"
-
-    # Store webhook URL for later use
-    export WEBHOOK_URL
 }
 
-# Function to register with hub
-register_with_hub() {
-    if [ -z "$HUB_URL" ]; then
-        echo ""
-        echo "NOTE: Hub URL not configured. Skipping hub registration."
-        echo "To register later, run: ./setup.sh --reconnect"
-        return
-    fi
+# ============================================================================
+# DEPENDENCY CHECKS
+# ============================================================================
 
-    if [ -z "$WEBHOOK_URL" ]; then
-        echo "No webhook URL available. Skipping hub registration."
-        return
-    fi
+check_dependencies() {
+    print_info "Checking dependencies..."
 
-    echo ""
-    echo "Registering with Central Hub..."
-
-    # Get user email from clasp
-    USER_EMAIL=$(clasp login --status 2>/dev/null | grep -o '[a-zA-Z0-9._%+-]*@[a-zA-Z0-9.-]*\.[a-zA-Z]*' | head -1)
-
-    # Get script ID
-    SCRIPT_ID=$(grep -o '"scriptId"[[:space:]]*:[[:space:]]*"[^"]*"' "$SRC_DIR/.clasp.json" 2>/dev/null | cut -d'"' -f4)
-
-    # Get instance name from email
-    INSTANCE_NAME=$(echo "$USER_EMAIL" | cut -d'@' -f1 | tr -cd '[:alnum:]_')
-
-    # Get sheet ID (try to extract from clasp open output or ask user)
-    echo "To complete registration, we need your Google Sheet ID."
-    echo "You can find it in your spreadsheet URL: docs.google.com/spreadsheets/d/SHEET_ID/edit"
-    read -p "Enter your Sheet ID: " SHEET_ID
-
-    if [ -z "$SHEET_ID" ]; then
-        echo "No Sheet ID provided. Skipping hub registration."
-        echo "You can register later with: ./setup.sh --reconnect"
-        return
-    fi
-
-    # Call hub registration endpoint
-    REGISTER_RESPONSE=$(curl -s -X POST "$HUB_URL" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"action\": \"register\",
-            \"email\": \"$USER_EMAIL\",
-            \"sheetId\": \"$SHEET_ID\",
-            \"instanceName\": \"$INSTANCE_NAME\",
-            \"webhookUrl\": \"$WEBHOOK_URL\"
-        }" 2>/dev/null || echo '{"success": false, "error": "Could not connect to hub"}')
-
-    echo "Hub response: $REGISTER_RESPONSE"
-
-    if echo "$REGISTER_RESPONSE" | grep -q '"success"[[:space:]]*:[[:space:]]*true'; then
-        echo ""
-        echo "Successfully registered with Central Hub!"
-    else
-        echo ""
-        echo "WARNING: Hub registration may have failed."
-        echo "You can try again later with: ./setup.sh --reconnect"
-    fi
-}
-
-# Handle --switch-account flag
-if [ "$1" == "--switch-account" ]; then
-    echo "Switching Google account..."
-    clasp logout 2>/dev/null || true
-    clasp login
-    echo ""
-    echo "Account switched. Run ./setup.sh again to create a project."
-    exit 0
-fi
-
-# Handle --reconnect flag
-if [ "$1" == "--reconnect" ]; then
-    echo "Reconnecting existing project..."
-    echo ""
-
-    # Check if logged in to clasp
-    if ! clasp login --status 2>/dev/null | grep -q "You are logged in"; then
-        echo "Please log in with your Google account."
-        clasp login
-    fi
-
-    # Check for existing .clasp.json
-    if [ ! -f "$SRC_DIR/.clasp.json" ]; then
-        echo "ERROR: No existing project found in src/.clasp.json"
-        echo "Run ./setup.sh without --reconnect to set up a new project."
+    # Check npm
+    if ! command -v npm &> /dev/null; then
+        print_error "npm not found. Install Node.js first:"
+        echo "  Mac: brew install node@20"
+        echo "  Download: https://nodejs.org/"
         exit 1
     fi
+
+    # Check Node version
+    NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
+    if [ "$NODE_VERSION" -ge 25 ]; then
+        print_warning "Node.js v25+ detected - memory workaround enabled"
+    fi
+
+    # Check clasp
+    if ! command -v clasp &> /dev/null; then
+        print_info "Installing clasp..."
+        npm install -g @google/clasp
+    fi
+
+    # Check clasp login
+    if ! clasp login --status 2>/dev/null | grep -q "You are logged in"; then
+        print_warning "Not logged into clasp"
+        clasp login
+    else
+        LOGGED_IN_AS=$(clasp login --status 2>/dev/null | grep -o '[^ ]*@[^ ]*' | head -1 || echo "unknown")
+        print_success "Logged in as: $LOGGED_IN_AS"
+    fi
+
+    echo ""
+}
+
+# ============================================================================
+# PROJECT TYPE SELECTION
+# ============================================================================
+
+select_project_type() {
+    echo -e "${YELLOW}What are you setting up?${NC}"
+    echo ""
+    echo "  1) User Instance  - Individual email sorter sheet"
+    echo "  2) Central Hub    - Shared hub for routing (admin only)"
+    echo ""
+    read -p "Enter choice (1 or 2): " TYPE_CHOICE
+
+    case $TYPE_CHOICE in
+        1) PROJECT_TYPE="user"; SRC_DIR="$SCRIPT_DIR/src" ;;
+        2) PROJECT_TYPE="hub"; SRC_DIR="$SCRIPT_DIR/central-hub" ;;
+        *) print_error "Invalid choice"; exit 1 ;;
+    esac
+
+    # Verify directory exists
+    if [ ! -d "$SRC_DIR" ]; then
+        print_error "Directory not found: $SRC_DIR"
+        exit 1
+    fi
+
+    echo ""
+}
+
+# ============================================================================
+# ACTION SELECTION
+# ============================================================================
+
+select_action() {
+    echo -e "${YELLOW}What would you like to do?${NC}"
+    echo ""
+    echo "  1) Create NEW project (Google Sheet + Apps Script)"
+    echo "  2) Update EXISTING project"
+    echo "  3) Switch Google account"
+    echo "  4) Exit"
+    echo ""
+    read -p "Enter choice (1-4): " ACTION_CHOICE
+    echo ""
+}
+
+# ============================================================================
+# CREATE NEW PROJECT
+# ============================================================================
+
+create_new_project() {
+    local project_name
+
+    if [ "$PROJECT_TYPE" = "hub" ]; then
+        project_name="Smart Call Time Hub"
+    else
+        project_name="Smart Call Time - Email Sorter"
+    fi
+
+    print_info "Creating new project: $project_name"
+
+    # Clean up any existing .clasp.json
+    rm -f "$SRC_DIR/.clasp.json"
+    rm -f "$HOME/.clasp.json"
 
     cd "$SRC_DIR"
 
-    echo "Pushing latest code..."
-    clasp push
+    # Create new project
+    if clasp create --type sheets --title "$project_name" --rootDir "$SRC_DIR"; then
+        print_success "Project created"
+    else
+        print_error "Failed to create project"
+        exit 1
+    fi
 
-    # Deploy/redeploy web app
+    # Push code
+    push_code
+
+    # Deploy as web app
     deploy_webapp
 
-    # Register with hub
-    register_with_hub
-
-    echo ""
-    echo "============================================"
-    echo "  RECONNECT COMPLETE!"
-    echo "============================================"
-    echo ""
-    echo "Webhook URL: $WEBHOOK_URL"
-    echo ""
-    exit 0
-fi
-
-# Check if logged in to clasp
-echo "Checking Google account login..."
-if ! clasp login --status 2>/dev/null | grep -q "You are logged in"; then
-    echo ""
-    echo "Please log in with your Google account."
-    echo "A browser window will open - select the account you want to use."
-    echo ""
-    clasp login
-fi
-
-echo ""
-echo "Choose an option:"
-echo ""
-echo "  1. Create a NEW Google Sheet (recommended for first-time setup)"
-echo "  2. Push to an EXISTING Apps Script project"
-echo "  3. Reconnect & redeploy webhook"
-echo "  4. Switch Google account"
-echo ""
-read -p "Enter choice (1, 2, 3, or 4): " choice
-
-case $choice in
-    1)
-        echo ""
-        echo "Creating new Google Sheets project..."
-        echo ""
-
-        # Remove existing .clasp.json if present
-        rm -f "$SRC_DIR/.clasp.json"
-
-        # Change to src directory
-        cd "$SRC_DIR"
-
-        # Create new project
-        clasp create --type sheets --title "Smart Call Time - Flow Integrator"
-
-        # Verify .clasp.json was created and fix rootDir if needed
-        if [ -f ".clasp.json" ]; then
-            # Extract scriptId and recreate with correct rootDir
-            SCRIPT_ID=$(grep -o '"scriptId"[[:space:]]*:[[:space:]]*"[^"]*"' .clasp.json | cut -d'"' -f4)
-            if [ -n "$SCRIPT_ID" ]; then
-                cat > .clasp.json << EOF
-{
-  "scriptId": "$SCRIPT_ID",
-  "rootDir": "."
+    # Show completion
+    show_completion
 }
-EOF
-            fi
+
+# ============================================================================
+# UPDATE EXISTING PROJECT
+# ============================================================================
+
+update_existing_project() {
+    print_info "Updating existing project..."
+    echo ""
+
+    # Check for existing .clasp.json
+    if [ -f "$SRC_DIR/.clasp.json" ]; then
+        EXISTING_ID=$(grep -o '"scriptId":"[^"]*"' "$SRC_DIR/.clasp.json" 2>/dev/null | cut -d'"' -f4)
+        if [ -n "$EXISTING_ID" ]; then
+            echo "Found existing project:"
+            echo -e "  Script ID: ${CYAN}$EXISTING_ID${NC}"
+            echo ""
+            echo "  1) Use this project"
+            echo "  2) Enter different Script ID"
+            echo ""
+            read -p "Enter choice (1 or 2): " UPDATE_CHOICE
+
+            case $UPDATE_CHOICE in
+                1) ;; # Use existing
+                2) enter_script_id ;;
+                *) print_error "Invalid choice"; exit 1 ;;
+            esac
+        else
+            enter_script_id
         fi
-
+    else
+        echo "No existing project configuration found."
         echo ""
-        echo "Pushing code to Google..."
-        clasp push
+        enter_script_id
+    fi
 
-        # Deploy as web app
+    echo ""
+
+    # Push code
+    push_code
+
+    # Ask about deployment
+    echo ""
+    read -p "Deploy/update web app? (y/n): " DEPLOY_CHOICE
+    if [ "$DEPLOY_CHOICE" = "y" ] || [ "$DEPLOY_CHOICE" = "Y" ]; then
         deploy_webapp
+    fi
 
-        # Register with hub
-        register_with_hub
-
-        echo ""
-        echo "============================================"
-        echo "  SETUP COMPLETE!"
-        echo "============================================"
-        echo ""
-        echo "Webhook URL: $WEBHOOK_URL"
-        echo ""
-        echo "Next steps:"
-        echo ""
-        echo "  1. Open the Google Sheets URL shown above"
-        echo "  2. REFRESH the page"
-        echo "  3. Click: Smart Call Time > Email Sorter > Setup"
-        echo "  4. Grant permissions when prompted"
-        echo ""
-        ;;
-
-    2)
-        echo ""
-        read -p "Enter your Script ID: " script_id
-
-        if [ -z "$script_id" ]; then
-            echo "No Script ID entered. Exiting."
-            exit 1
-        fi
-
-        # Create .clasp.json in src directory with correct rootDir
-        cat > "$SRC_DIR/.clasp.json" << EOF
-{
-  "scriptId": "$script_id",
-  "rootDir": "."
+    show_completion
 }
-EOF
 
-        cd "$SRC_DIR"
-        echo "Pushing code..."
-        clasp push
+# ============================================================================
+# ENTER SCRIPT ID
+# ============================================================================
 
-        # Deploy as web app
-        deploy_webapp
+enter_script_id() {
+    echo "To find your Script ID:"
+    echo ""
+    echo "  1. Open your Google Sheet"
+    echo "  2. Click Extensions > Apps Script"
+    echo "  3. Click Project Settings (gear icon)"
+    echo "  4. Copy the Script ID"
+    echo ""
+    echo "Or visit: https://script.google.com to see all your projects"
+    echo ""
+    read -p "Enter Script ID: " SCRIPT_ID
 
-        # Register with hub
-        register_with_hub
-
-        echo ""
-        echo "============================================"
-        echo "  PUSH COMPLETE!"
-        echo "============================================"
-        echo ""
-        echo "Webhook URL: $WEBHOOK_URL"
-        echo ""
-        echo "Open your spreadsheet in the browser, refresh, and run:"
-        echo "  Smart Call Time > Email Sorter > Setup"
-        echo ""
-        ;;
-
-    3)
-        # Reconnect option (same as --reconnect flag)
-        if [ ! -f "$SRC_DIR/.clasp.json" ]; then
-            echo "ERROR: No existing project found in src/.clasp.json"
-            echo "Use option 1 or 2 to set up a project first."
-            exit 1
-        fi
-
-        cd "$SRC_DIR"
-
-        echo "Pushing latest code..."
-        clasp push
-
-        # Deploy/redeploy web app
-        deploy_webapp
-
-        # Register with hub
-        register_with_hub
-
-        echo ""
-        echo "============================================"
-        echo "  RECONNECT COMPLETE!"
-        echo "============================================"
-        echo ""
-        echo "Webhook URL: $WEBHOOK_URL"
-        echo ""
-        ;;
-
-    4)
-        echo ""
-        echo "Logging out of current account..."
-        clasp logout 2>/dev/null || true
-        echo ""
-        echo "Please log in with a different Google account:"
-        clasp login
-        echo ""
-        echo "Account switched! Run ./setup.sh again to create a project."
-        echo ""
-        ;;
-
-    *)
-        echo "Invalid choice. Exiting."
+    if [ -z "$SCRIPT_ID" ]; then
+        print_error "Script ID is required"
         exit 1
+    fi
+
+    # Validate format (basic check)
+    if [[ ! "$SCRIPT_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        print_error "Invalid Script ID format"
+        exit 1
+    fi
+
+    echo "{\"scriptId\":\"$SCRIPT_ID\",\"rootDir\":\"$SRC_DIR\"}" > "$SRC_DIR/.clasp.json"
+    print_success "Configured for Script ID: $SCRIPT_ID"
+}
+
+# ============================================================================
+# PUSH CODE
+# ============================================================================
+
+push_code() {
+    print_info "Pushing code to Apps Script..."
+
+    cd "$SRC_DIR"
+
+    if clasp push --force; then
+        print_success "Code pushed successfully"
+
+        # Show what was pushed
+        echo ""
+        echo "Files pushed:"
+        ls -1 *.gs *.json 2>/dev/null | while read f; do echo "  └─ $f"; done
+    else
+        print_error "Failed to push code"
+        echo ""
+        echo "Common fixes:"
+        echo "  - Run: clasp login"
+        echo "  - Check Script ID is correct"
+        echo "  - Ensure you have edit access to the project"
+        exit 1
+    fi
+}
+
+# ============================================================================
+# DEPLOY WEB APP
+# ============================================================================
+
+deploy_webapp() {
+    print_info "Deploying as web app..."
+
+    cd "$SRC_DIR"
+
+    # Check existing deployments
+    DEPLOY_LIST=$(clasp deployments 2>/dev/null || echo "")
+    EXISTING=$(echo "$DEPLOY_LIST" | grep -c "@" || echo "0")
+
+    if [ "$EXISTING" -gt 0 ]; then
+        print_info "Found existing deployment - updating..."
+        DEPLOY_ID=$(echo "$DEPLOY_LIST" | grep "@" | head -1 | awk '{print $2}')
+        clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>/dev/null || \
+        clasp deploy --description "Deploy $(date +%Y-%m-%d)"
+    else
+        clasp deploy --description "Initial deploy $(date +%Y-%m-%d)"
+    fi
+
+    # Get deployment URL
+    DEPLOY_LIST=$(clasp deployments 2>/dev/null || echo "")
+    DEPLOY_ID=$(echo "$DEPLOY_LIST" | grep "@" | tail -1 | awk '{print $2}')
+
+    if [ -n "$DEPLOY_ID" ]; then
+        WEBAPP_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
+
+        echo ""
+        echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+        echo -e "${GREEN}  WEB APP DEPLOYED${NC}"
+        echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+        echo ""
+
+        if [ "$PROJECT_TYPE" = "hub" ]; then
+            echo -e "Hub URL (share with users):"
+            echo -e "${YELLOW}$WEBAPP_URL${NC}"
+            echo "$WEBAPP_URL" > "$SRC_DIR/.hub_url"
+            print_info "URL saved to central-hub/.hub_url"
+        else
+            echo -e "Webhook URL (for Hub registration):"
+            echo -e "${YELLOW}$WEBAPP_URL${NC}"
+        fi
+        echo ""
+    else
+        print_warning "Could not determine deployment URL"
+        echo "Run 'clasp deployments' in $SRC_DIR to see deployments"
+    fi
+}
+
+# ============================================================================
+# SWITCH ACCOUNT
+# ============================================================================
+
+switch_account() {
+    print_info "Logging out of current account..."
+    clasp logout 2>/dev/null || true
+
+    print_info "Opening browser for login..."
+    clasp login
+
+    print_success "Account switched"
+    echo ""
+}
+
+# ============================================================================
+# SHOW COMPLETION
+# ============================================================================
+
+show_completion() {
+    echo ""
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  SETUP COMPLETE!${NC}"
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    if [ "$PROJECT_TYPE" = "hub" ]; then
+        echo "Next steps for Hub:"
+        echo ""
+        echo "  1. Open the Hub spreadsheet and REFRESH the page"
+        echo "  2. Click: Hub Admin > Initial Setup"
+        echo "  3. Click: Hub Admin > Configure Chat Webhook"
+        echo "  4. Click: Hub Admin > Configure Chat Space"
+        echo ""
+        if [ -f "$SRC_DIR/.hub_url" ]; then
+            echo -e "Hub URL: ${YELLOW}$(cat "$SRC_DIR/.hub_url")${NC}"
+        fi
+    else
+        echo "Next steps for User Instance:"
+        echo ""
+        echo "  1. Open the Google Sheet and REFRESH the page"
+        echo "  2. Click: Smart Call Time > Email Sorter > Setup"
+        echo "  3. Grant permissions when prompted"
+        echo "  4. Configure labels on the Labels sheet"
+        echo ""
+    fi
+    echo ""
+}
+
+# ============================================================================
+# CLEAN START
+# ============================================================================
+
+clean_start() {
+    print_header
+    print_warning "This will remove all local configuration files."
+    echo ""
+    echo "Files to be removed:"
+    [ -f "$SCRIPT_DIR/src/.clasp.json" ] && echo "  - src/.clasp.json"
+    [ -f "$SCRIPT_DIR/central-hub/.clasp.json" ] && echo "  - central-hub/.clasp.json"
+    [ -f "$SCRIPT_DIR/central-hub/.hub_url" ] && echo "  - central-hub/.hub_url"
+    [ -f "$SCRIPT_DIR/central-hub/.chat_space_id" ] && echo "  - central-hub/.chat_space_id"
+    [ -f "$HOME/.clasp.json" ] && echo "  - ~/.clasp.json (home directory)"
+    echo ""
+    echo "This does NOT delete your Google Sheets or Apps Script projects."
+    echo ""
+    read -p "Continue? (yes/no): " CONFIRM
+
+    if [ "$CONFIRM" = "yes" ]; then
+        rm -f "$SCRIPT_DIR/src/.clasp.json"
+        rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
+        rm -f "$SCRIPT_DIR/central-hub/.hub_url"
+        rm -f "$SCRIPT_DIR/central-hub/.chat_space_id"
+        rm -f "$HOME/.clasp.json"
+        echo ""
+        print_success "Local configuration removed"
+        echo ""
+        echo "Run ./setup.sh again to start fresh."
+    else
+        print_info "Cancelled"
+    fi
+}
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+main() {
+    print_header
+
+    # Always check for updates first
+    pull_latest
+
+    # Check dependencies
+    check_dependencies
+
+    # Select project type (User or Hub)
+    select_project_type
+
+    # Select action (Create, Update, Switch)
+    select_action
+
+    case $ACTION_CHOICE in
+        1) create_new_project ;;
+        2) update_existing_project ;;
+        3) switch_account; main ;;
+        4) echo "Goodbye!"; exit 0 ;;
+        *) print_error "Invalid choice"; exit 1 ;;
+    esac
+}
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
+
+case "${1:-}" in
+    --clean)
+        clean_start
+        ;;
+    --help|-h)
+        echo "Smart Call Time - Setup Script"
+        echo ""
+        echo "Usage: ./setup.sh [option]"
+        echo ""
+        echo "Options:"
+        echo "  (none)    Interactive setup menu"
+        echo "  --clean   Remove local config files and start fresh"
+        echo "  --help    Show this help"
+        echo ""
+        echo "Examples:"
+        echo "  ./setup.sh           # Run interactive setup"
+        echo "  ./setup.sh --clean   # Clear config and start over"
+        ;;
+    *)
+        main
         ;;
 esac
