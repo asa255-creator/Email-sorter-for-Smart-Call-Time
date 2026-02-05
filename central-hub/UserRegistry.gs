@@ -41,10 +41,14 @@ function registerUser(userData) {
 
       logHub('USER_UPDATED', `${instanceName} (${email})`);
 
+      // Re-invite to Chat space (in case they left or were removed)
+      const inviteResult = inviteUserToSpace(email);
+
       return {
         success: true,
         message: 'Registration updated',
-        instanceName: instanceName
+        instanceName: instanceName,
+        spaceInvite: inviteResult
       };
     }
 
@@ -60,10 +64,14 @@ function registerUser(userData) {
 
     logHub('USER_REGISTERED', `${instanceName} (${email})`);
 
+    // Invite user to Chat space
+    const inviteResult = inviteUserToSpace(email);
+
     return {
       success: true,
       message: 'User registered successfully',
-      instanceName: instanceName
+      instanceName: instanceName,
+      spaceInvite: inviteResult
     };
 
   } catch (error) {
@@ -235,4 +243,112 @@ function getOrCreateRegistrySheet() {
   }
 
   return sheet;
+}
+
+// ============================================================================
+// CHAT SPACE INVITE
+// ============================================================================
+
+/**
+ * Invites a user to the shared Chat space.
+ * Called automatically on successful registration.
+ *
+ * @param {string} email - User's email address
+ * @returns {Object} Result with success status
+ */
+function inviteUserToSpace(email) {
+  try {
+    const spaceId = getHubConfig('chat_space_id');
+
+    if (!spaceId) {
+      return {
+        success: false,
+        error: 'Chat space ID not configured. Run Hub Admin > Configure Chat Space first.'
+      };
+    }
+
+    // Create membership resource
+    const membership = {
+      member: {
+        name: `users/${email}`,
+        type: 'HUMAN'
+      }
+    };
+
+    // Use Chat API to create membership
+    const result = Chat.Spaces.Members.create(membership, spaceId);
+
+    logHub('SPACE_INVITE_SENT', `Invited ${email} to space`);
+
+    return {
+      success: true,
+      message: `Invited ${email} to Chat space`,
+      membershipName: result.name
+    };
+
+  } catch (error) {
+    // Check if already a member (not an error)
+    if (error.message.includes('ALREADY_EXISTS')) {
+      logHub('SPACE_INVITE_SKIP', `${email} already in space`);
+      return {
+        success: true,
+        message: `${email} is already a member of the space`
+      };
+    }
+
+    logHub('SPACE_INVITE_ERROR', `${email}: ${error.message}`);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Gets a Hub configuration value.
+ *
+ * @param {string} key - Config key
+ * @returns {string|null} Config value
+ */
+function getHubConfig(key) {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('HubConfig');
+
+  if (!sheet) return null;
+
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === key) {
+      return data[i][1];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Sets a Hub configuration value.
+ *
+ * @param {string} key - Config key
+ * @param {string} value - Config value
+ */
+function setHubConfig(key, value) {
+  const ss = SpreadsheetApp.getActive();
+  let sheet = ss.getSheetByName('HubConfig');
+
+  if (!sheet) {
+    sheet = ss.insertSheet('HubConfig');
+    sheet.getRange(1, 1, 1, 2).setValues([['Key', 'Value']]);
+    sheet.setFrozenRows(1);
+  }
+
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === key) {
+      sheet.getRange(i + 1, 2).setValue(value);
+      return;
+    }
+  }
+
+  sheet.appendRow([key, value]);
 }

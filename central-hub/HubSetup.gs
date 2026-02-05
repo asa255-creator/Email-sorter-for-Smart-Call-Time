@@ -18,6 +18,7 @@ function onOpen() {
   ui.createMenu('Hub Admin')
     .addItem('Initial Setup', 'runHubSetup')
     .addItem('Configure Chat Webhook', 'configureChatWebhook')
+    .addItem('Configure Chat Space (for invites)', 'configureChatSpace')
     .addSeparator()
     .addItem('View Registered Users', 'showRegisteredUsers')
     .addItem('View Pending Requests', 'showPendingRequests')
@@ -25,6 +26,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Test Chat Connection', 'testChatConnection')
     .addItem('Test Route to User', 'testRouteToUser')
+    .addItem('Test Invite User', 'testInviteUser')
     .addToUi();
 }
 
@@ -51,8 +53,9 @@ function runHubSetup() {
     'Next steps:\n' +
     '1. Deploy this project as a Web App\n' +
     '2. Deploy as a Chat App (for receiving AI messages)\n' +
-    '3. Configure the Chat Webhook URL\n' +
-    '4. Share the Hub Web App URL with users',
+    '3. Configure the Chat Webhook URL (for outbound messages)\n' +
+    '4. Configure the Chat Space ID (for auto-inviting users)\n' +
+    '5. Share the Hub Web App URL with users',
     ui.ButtonSet.OK
   );
 }
@@ -76,6 +79,46 @@ function configureChatWebhook() {
     if (url) {
       setChatWebhookUrl(url);
       ui.alert('Chat webhook URL saved successfully!');
+    }
+  }
+}
+
+/**
+ * Prompts for and saves the Chat space ID (for inviting users).
+ * The space ID is in the format "spaces/XXXXXXXXX".
+ */
+function configureChatSpace() {
+  const ui = SpreadsheetApp.getUi();
+
+  const currentSpaceId = getHubConfig('chat_space_id');
+
+  ui.alert(
+    'Chat Space ID',
+    'To find your Chat space ID:\n\n' +
+    '1. Open the Chat space in a browser\n' +
+    '2. Look at the URL: https://chat.google.com/room/XXXXXXXXX\n' +
+    '3. The space ID is "spaces/XXXXXXXXX"\n\n' +
+    'Or use Apps Script to list spaces with Chat.Spaces.list()',
+    ui.ButtonSet.OK
+  );
+
+  const prompt = currentSpaceId
+    ? `Current: ${currentSpaceId}\n\nEnter space ID (format: spaces/XXXXXXXXX):`
+    : 'Enter the Chat space ID (format: spaces/XXXXXXXXX):';
+
+  const response = ui.prompt('Configure Chat Space', prompt, ui.ButtonSet.OK_CANCEL);
+
+  if (response.getSelectedButton() === ui.Button.OK) {
+    let spaceId = response.getResponseText().trim();
+
+    if (spaceId) {
+      // Ensure proper format
+      if (!spaceId.startsWith('spaces/')) {
+        spaceId = 'spaces/' + spaceId;
+      }
+
+      setHubConfig('chat_space_id', spaceId);
+      ui.alert('Success', `Chat space ID saved: ${spaceId}\n\nNew user registrations will now receive automatic invites.`, ui.ButtonSet.OK);
     }
   }
 }
@@ -187,6 +230,39 @@ function testRouteToUser() {
       ui.alert('Success', `Routed "${labels}" to ${testUser.instanceName}\n\nWebhook response: ${JSON.stringify(result.webhookResponse)}`, ui.ButtonSet.OK);
     } else {
       ui.alert('Failed', `Routing failed: ${result.error}`, ui.ButtonSet.OK);
+    }
+  }
+}
+
+/**
+ * Tests inviting a user to the Chat space.
+ */
+function testInviteUser() {
+  const ui = SpreadsheetApp.getUi();
+
+  const spaceId = getHubConfig('chat_space_id');
+  if (!spaceId) {
+    ui.alert('Not Configured', 'Chat space ID not configured. Run "Configure Chat Space" first.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const response = ui.prompt(
+    'Test Invite',
+    'Enter email address to invite to the Chat space:',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const email = response.getResponseText().trim();
+
+    if (email) {
+      const result = inviteUserToSpace(email);
+
+      if (result.success) {
+        ui.alert('Success', result.message, ui.ButtonSet.OK);
+      } else {
+        ui.alert('Failed', `Invite failed: ${result.error}`, ui.ButtonSet.OK);
+      }
     }
   }
 }
