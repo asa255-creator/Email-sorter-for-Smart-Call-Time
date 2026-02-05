@@ -3,6 +3,10 @@
  *
  * Manages the registry of user instances.
  * Stores email, webhook URL, instance name, and registration status.
+ *
+ * Dependencies:
+ *   - HubConfig.gs: getHubConfig()
+ *   - HubMain.gs: logHub()
  */
 
 // ============================================================================
@@ -304,51 +308,5 @@ function inviteUserToSpace(email) {
   }
 }
 
-/**
- * Gets a Hub configuration value.
- *
- * @param {string} key - Config key
- * @returns {string|null} Config value
- */
-function getHubConfig(key) {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('HubConfig');
-
-  if (!sheet) return null;
-
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === key) {
-      return data[i][1];
-    }
-  }
-
-  return null;
-}
-
-/**
- * Sets a Hub configuration value.
- *
- * @param {string} key - Config key
- * @param {string} value - Config value
- */
-function setHubConfig(key, value) {
-  const ss = SpreadsheetApp.getActive();
-  let sheet = ss.getSheetByName('HubConfig');
-
-  if (!sheet) {
-    sheet = ss.insertSheet('HubConfig');
-    sheet.getRange(1, 1, 1, 2).setValues([['Key', 'Value']]);
-    sheet.setFrozenRows(1);
-  }
-
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === key) {
-      sheet.getRange(i + 1, 2).setValue(value);
-      return;
-    }
-  }
-
-  sheet.appendRow([key, value]);
-}
+// Note: getHubConfig, setHubConfig are defined in HubConfig.gs
+// to maintain atomic code structure

@@ -55,8 +55,10 @@ Email-sorter-for-Smart-Call-Time/
 │   └── Logger.gs               # Logging utilities
 │
 ├── central-hub/                # CENTRAL HUB CODE
+│   ├── setup.sh                # Hub setup script (run this!)
 │   ├── appsscript.json         # Manifest (Chat app + webapp)
 │   ├── HubMain.gs              # Entry points (doPost, doGet, onMessage)
+│   ├── HubConfig.gs            # Configuration management
 │   ├── UserRegistry.gs         # User registration/management
 │   ├── MessageRouter.gs        # Parse messages, route to users
 │   ├── PendingRequests.gs      # Track requests awaiting AI response
@@ -99,13 +101,33 @@ Email-sorter-for-Smart-Call-Time/
 
 The Central Hub is deployed ONCE and shared by all users.
 
-### Step 1: Create Hub Google Sheet
+### Option A: Automated Setup (Recommended)
+
+```bash
+cd Email-sorter-for-Smart-Call-Time/central-hub
+./setup.sh
+```
+
+Choose from the menu:
+1. **Create NEW Hub** - Creates Google Sheet + Apps Script, deploys web app
+2. **Push to EXISTING project** - Connect to existing Apps Script
+3. **Deploy/Update web app** - Redeploy only
+4. **Configure Chat space ID** - Set up auto-invites
+
+The setup will output your **HUB_URL** - save this for users!
+
+### Option B: Manual Setup
+
+<details>
+<summary>Click to expand manual setup steps</summary>
+
+#### Step 1: Create Hub Google Sheet
 
 1. Go to [sheets.new](https://sheets.new) and create a new spreadsheet
 2. Name it "Smart Call Time Hub"
-3. Note the Sheet ID from the URL: `https://docs.google.com/spreadsheets/d/SHEET_ID_HERE/edit`
+3. Note the Sheet ID from the URL
 
-### Step 2: Create Hub Apps Script Project
+#### Step 2: Create Hub Apps Script Project
 
 1. In the spreadsheet, click **Extensions > Apps Script**
 2. Delete the default `Code.gs` content
@@ -114,16 +136,16 @@ The Central Hub is deployed ONCE and shared by all users.
 | File to Create | Copy From |
 |---------------|-----------|
 | HubMain.gs | central-hub/HubMain.gs |
+| HubConfig.gs | central-hub/HubConfig.gs |
 | UserRegistry.gs | central-hub/UserRegistry.gs |
 | MessageRouter.gs | central-hub/MessageRouter.gs |
 | PendingRequests.gs | central-hub/PendingRequests.gs |
 | ChatManager.gs | central-hub/ChatManager.gs |
 | HubSetup.gs | central-hub/HubSetup.gs |
 
-4. Replace `appsscript.json` content (click gear icon > Show manifest):
-   - Copy content from `central-hub/appsscript.json`
+4. Replace `appsscript.json` content (click gear icon > Show manifest)
 
-### Step 3: Deploy Hub as Web App
+#### Step 3: Deploy Hub as Web App
 
 1. Click **Deploy > New deployment**
 2. Click gear icon > **Web app**
@@ -133,21 +155,36 @@ The Central Hub is deployed ONCE and shared by all users.
 4. Click **Deploy**
 5. Copy the **Web app URL** - this is your `HUB_URL`
 
-### Step 4: Configure Hub Sheets
+</details>
 
-1. Back in the spreadsheet, refresh the page
-2. Click **Hub Admin > Run Initial Setup**
-3. Grant permissions when prompted
+### Post-Deployment Configuration
 
-### Step 5: Set Up Chat Webhook (For Outbound Messages)
+After deploying (either method):
 
-1. Open Google Chat
-2. Create or open a space for AI categorization
-3. Click space name > **Integrations** > **Webhooks** > **Add webhook**
-4. Name: "Email Sorter Hub"
-5. Copy the webhook URL
-6. In Hub spreadsheet: **Hub Admin > Configure Chat Webhook**
-7. Paste the webhook URL
+1. **Open the Hub spreadsheet** and refresh the page
+2. **Run initial setup**: Hub Admin > Initial Setup
+3. **Configure Chat Webhook** (for outbound messages):
+   - Open Google Chat, create/open a space
+   - Space settings > Integrations > Webhooks > Add webhook
+   - Copy the webhook URL
+   - Hub Admin > Configure Chat Webhook > Paste URL
+4. **Configure Chat Space ID** (for auto-inviting users):
+   - Get your space ID from the Chat URL: `https://chat.google.com/room/XXXXXXXXX`
+   - Hub Admin > Configure Chat Space > Enter `spaces/XXXXXXXXX`
+
+### (Optional) Deploy as Chat App
+
+To receive AI responses directly via Chat app:
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com)
+2. Create or select a project
+3. Enable the **Google Chat API**
+4. Configure Chat API settings:
+   - App name: Smart Call Time Hub
+   - Functionality: "Receive 1:1 messages" and "Join spaces"
+   - Connection settings: Apps Script project
+   - Script ID: (from Apps Script > Project Settings)
+5. Save and wait for propagation
 
 ### Step 6: (Optional) Deploy as Chat App
 
@@ -431,7 +468,8 @@ Both codebases follow atomic/modular design:
 | Module | Responsibility |
 |--------|---------------|
 | HubMain.gs | Entry points (doPost, doGet, onMessage) |
-| UserRegistry.gs | User CRUD, lookup by instance name |
+| HubConfig.gs | Configuration storage (single source of truth) |
+| UserRegistry.gs | User CRUD, lookup by instance name, space invites |
 | MessageRouter.gs | Parse AI responses, route to user webhooks |
 | PendingRequests.gs | Track requests, handle timeouts |
 | ChatManager.gs | Send messages to Chat space |
