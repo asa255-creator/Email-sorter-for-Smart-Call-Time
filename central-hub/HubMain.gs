@@ -268,6 +268,28 @@ function handleConfirmComplete(data) {
 }
 
 // ============================================================================
+// AUTHORIZATION
+// ============================================================================
+
+/**
+ * Touches all OAuth scopes so the consent prompt covers everything at once.
+ * Run this once (from the editor or via clasp run) to authorize the Hub.
+ */
+function authorize() {
+  // Spreadsheet scope
+  SpreadsheetApp.getActive();
+
+  // External request scope
+  UrlFetchApp.getRequest && UrlFetchApp;
+
+  // Chat scopes are covered by the advanced service declaration in appsscript.json
+  // They get consented as part of the same OAuth flow
+
+  Logger.log('All Hub scopes authorized successfully.');
+  return { status: 'authorized', scopes: 'spreadsheets, urlfetch, chat' };
+}
+
+// ============================================================================
 // UTILITIES
 // ============================================================================
 

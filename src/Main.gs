@@ -157,6 +157,30 @@ function refreshAll() {
 }
 
 // ============================================================================
+// AUTHORIZATION
+// ============================================================================
+
+/**
+ * Touches all OAuth scopes so the consent prompt covers everything at once.
+ * Run this function once (from the editor or via clasp run) to authorize.
+ * After approving, all other functions will work without further prompts.
+ */
+function authorize() {
+  // Gmail scopes
+  GmailApp.getUserLabels();
+
+  // Spreadsheet scope
+  SpreadsheetApp.getActive();
+
+  // External request scope (UrlFetchApp)
+  // Just referencing the service is enough; no actual request needed
+  UrlFetchApp.getRequest && UrlFetchApp;
+
+  Logger.log('All scopes authorized successfully.');
+  return { status: 'authorized', scopes: 'gmail, spreadsheets, urlfetch' };
+}
+
+// ============================================================================
 // UTILITY SHORTCUTS (Delegates to modules)
 // ============================================================================
 
