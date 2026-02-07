@@ -24,6 +24,9 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Default Hub URL (can be overridden during setup)
+DEFAULT_HUB_URL="https://script.google.com/macros/library/d/1ugWVACllgPu1i11H5oZ0w1_XwevLqzp-KkfRYPW6aWrB9nxwSyy1tkHJ/2"
+
 # Fix Node.js v25 memory issues
 export NODE_OPTIONS="--max-old-space-size=8192"
 
@@ -199,6 +202,11 @@ create_new_project() {
     # Deploy as web app
     deploy_webapp
 
+    # Register with Hub (User instances only)
+    if [ "$PROJECT_TYPE" = "user" ]; then
+        prompt_hub_registration
+    fi
+
     # Show completion
     show_completion
 }
@@ -247,6 +255,20 @@ update_existing_project() {
     read -p "Deploy/update web app? (y/n): " DEPLOY_CHOICE
     if [ "$DEPLOY_CHOICE" = "y" ] || [ "$DEPLOY_CHOICE" = "Y" ]; then
         deploy_webapp
+
+        # Register/update with Hub (User instances only)
+        if [ "$PROJECT_TYPE" = "user" ]; then
+            prompt_hub_registration
+        fi
+    else
+        # Even without deploy, check if Hub registration needed (User only)
+        if [ "$PROJECT_TYPE" = "user" ]; then
+            echo ""
+            read -p "Check Hub registration status? (y/n): " CHECK_HUB
+            if [ "$CHECK_HUB" = "y" ] || [ "$CHECK_HUB" = "Y" ]; then
+                prompt_hub_registration
+            fi
+        fi
     fi
 
     show_completion
@@ -362,6 +384,180 @@ deploy_webapp() {
 }
 
 # ============================================================================
+# HUB REGISTRATION (User Instances Only)
+# ============================================================================
+
+# Get the current webapp URL from clasp deployments
+get_webapp_url() {
+    cd "$SRC_DIR"
+    local deploy_list=$(clasp deployments 2>/dev/null || echo "")
+    local deploy_id=$(echo "$deploy_list" | grep "@" | tail -1 | awk '{print $2}')
+
+    if [ -n "$deploy_id" ]; then
+        echo "https://script.google.com/macros/s/$deploy_id/exec"
+    else
+        echo ""
+    fi
+}
+
+# Check if webhook URL has changed since last registration
+check_webhook_changed() {
+    local current_url="$1"
+    local reg_file="$SRC_DIR/.hub_registered"
+
+    if [ ! -f "$reg_file" ]; then
+        return 0  # Not registered yet, needs registration
+    fi
+
+    local saved_webhook=$(grep "^webhook_url=" "$reg_file" 2>/dev/null | cut -d'=' -f2-)
+
+    if [ "$current_url" != "$saved_webhook" ]; then
+        return 0  # URL changed, needs update
+    fi
+
+    return 1  # No change
+}
+
+# Register or update registration with Hub
+register_with_hub() {
+    local webapp_url="$1"
+    local hub_url="$2"
+
+    if [ -z "$webapp_url" ]; then
+        print_error "No webapp URL available"
+        return 1
+    fi
+
+    print_info "Registering with Hub..."
+    echo "  Webhook URL: $webapp_url"
+    echo "  Hub URL: $hub_url"
+    echo ""
+
+    # Get user email from clasp login
+    local user_email=$(clasp login --status 2>/dev/null | grep -o '[^ ]*@[^ ]*' | head -1)
+
+    if [ -z "$user_email" ]; then
+        print_warning "Could not determine email, using placeholder"
+        user_email="unknown@user"
+    fi
+
+    # Generate instance name from email
+    local instance_name=$(echo "$user_email" | cut -d'@' -f1 | tr -cd 'a-zA-Z0-9_')
+
+    # Make registration request
+    local response=$(curl -s -X POST "$hub_url" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"action\": \"register\",
+            \"email\": \"$user_email\",
+            \"instanceName\": \"$instance_name\",
+            \"webhookUrl\": \"$webapp_url\"
+        }" 2>/dev/null)
+
+    # Check response
+    if echo "$response" | grep -q '"success":true'; then
+        print_success "Registered with Hub successfully"
+
+        # Save registration info locally
+        cat > "$SRC_DIR/.hub_registered" << EOF
+# Smart Call Time - Hub Registration
+# Generated: $(date)
+hub_url=$hub_url
+webhook_url=$webapp_url
+instance_name=$instance_name
+email=$user_email
+EOF
+        print_info "Registration saved to src/.hub_registered"
+
+        # Check if response mentions update vs new registration
+        if echo "$response" | grep -q '"message":"Registration updated"'; then
+            print_info "Updated existing registration"
+        fi
+
+        return 0
+    else
+        print_error "Hub registration failed"
+        echo "Response: $response"
+        return 1
+    fi
+}
+
+# Prompt for Hub registration (User instances only)
+prompt_hub_registration() {
+    local webapp_url=$(get_webapp_url)
+
+    if [ -z "$webapp_url" ]; then
+        print_warning "No deployment found - skipping Hub registration"
+        return
+    fi
+
+    echo ""
+    echo -e "${YELLOW}Hub Registration${NC}"
+    echo "───────────────────────────────────────────────────────"
+
+    # Check if already registered and if URL changed
+    local reg_file="$SRC_DIR/.hub_registered"
+
+    if [ -f "$reg_file" ]; then
+        local saved_hub=$(grep "^hub_url=" "$reg_file" 2>/dev/null | cut -d'=' -f2-)
+        local saved_webhook=$(grep "^webhook_url=" "$reg_file" 2>/dev/null | cut -d'=' -f2-)
+
+        echo "Current registration:"
+        echo "  Hub: $saved_hub"
+        echo "  Webhook: $saved_webhook"
+        echo ""
+
+        if [ "$webapp_url" != "$saved_webhook" ]; then
+            print_warning "Webhook URL has changed!"
+            echo "  Old: $saved_webhook"
+            echo "  New: $webapp_url"
+            echo ""
+            echo "You should update your Hub registration."
+            read -p "Update Hub registration? (y/n): " UPDATE_REG
+
+            if [ "$UPDATE_REG" = "y" ] || [ "$UPDATE_REG" = "Y" ]; then
+                read -p "Use same Hub URL? (y/n): " SAME_HUB
+                if [ "$SAME_HUB" = "y" ] || [ "$SAME_HUB" = "Y" ]; then
+                    register_with_hub "$webapp_url" "$saved_hub"
+                else
+                    echo ""
+                    echo "Enter Hub URL (or press Enter for default):"
+                    echo -e "Default: ${CYAN}$DEFAULT_HUB_URL${NC}"
+                    read -p "Hub URL: " CUSTOM_HUB
+                    local hub_url="${CUSTOM_HUB:-$DEFAULT_HUB_URL}"
+                    register_with_hub "$webapp_url" "$hub_url"
+                fi
+            else
+                print_warning "Skipped - Hub still has old webhook URL"
+            fi
+        else
+            print_success "Already registered (URL unchanged)"
+            read -p "Re-register anyway? (y/n): " REREG
+            if [ "$REREG" = "y" ] || [ "$REREG" = "Y" ]; then
+                register_with_hub "$webapp_url" "$saved_hub"
+            fi
+        fi
+    else
+        # First time registration
+        echo "Your instance is not registered with a Hub yet."
+        echo ""
+        read -p "Register with Hub now? (y/n): " DO_REG
+
+        if [ "$DO_REG" = "y" ] || [ "$DO_REG" = "Y" ]; then
+            echo ""
+            echo "Enter Hub URL (or press Enter for default):"
+            echo -e "Default: ${CYAN}$DEFAULT_HUB_URL${NC}"
+            read -p "Hub URL: " CUSTOM_HUB
+            local hub_url="${CUSTOM_HUB:-$DEFAULT_HUB_URL}"
+            register_with_hub "$webapp_url" "$hub_url"
+        else
+            print_info "Skipped Hub registration"
+            echo "You can register later by running setup again."
+        fi
+    fi
+}
+
+# ============================================================================
 # SWITCH ACCOUNT
 # ============================================================================
 
@@ -406,6 +602,19 @@ show_completion() {
         echo "  3. Grant permissions when prompted"
         echo "  4. Configure labels on the Labels sheet"
         echo ""
+
+        # Show Hub registration status
+        if [ -f "$SRC_DIR/.hub_registered" ]; then
+            local hub_url=$(grep "^hub_url=" "$SRC_DIR/.hub_registered" 2>/dev/null | cut -d'=' -f2-)
+            local instance=$(grep "^instance_name=" "$SRC_DIR/.hub_registered" 2>/dev/null | cut -d'=' -f2-)
+            echo -e "Hub Registration: ${GREEN}Connected${NC}"
+            echo "  Instance: $instance"
+            echo "  Hub: $hub_url"
+        else
+            echo -e "Hub Registration: ${YELLOW}Not connected${NC}"
+            echo "  Run setup again to register with a Hub"
+        fi
+        echo ""
     fi
     echo ""
 }
@@ -420,6 +629,7 @@ clean_start() {
     echo ""
     echo "Files to be removed:"
     [ -f "$SCRIPT_DIR/src/.clasp.json" ] && echo "  - src/.clasp.json"
+    [ -f "$SCRIPT_DIR/src/.hub_registered" ] && echo "  - src/.hub_registered"
     [ -f "$SCRIPT_DIR/central-hub/.clasp.json" ] && echo "  - central-hub/.clasp.json"
     [ -f "$SCRIPT_DIR/central-hub/.hub_url" ] && echo "  - central-hub/.hub_url"
     [ -f "$SCRIPT_DIR/central-hub/.chat_space_id" ] && echo "  - central-hub/.chat_space_id"
@@ -431,6 +641,7 @@ clean_start() {
 
     if [ "$CONFIRM" = "yes" ]; then
         rm -f "$SCRIPT_DIR/src/.clasp.json"
+        rm -f "$SCRIPT_DIR/src/.hub_registered"
         rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
         rm -f "$SCRIPT_DIR/central-hub/.hub_url"
         rm -f "$SCRIPT_DIR/central-hub/.chat_space_id"
