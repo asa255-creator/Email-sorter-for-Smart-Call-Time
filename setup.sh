@@ -404,11 +404,31 @@ push_code() {
 
 # Remove library deployments so web app deployments are the only active webhook targets.
 remove_library_deployments() {
-    local deploy_list
-    deploy_list=$(clasp deployments 2>/dev/null || echo "")
+    local deploy_json
+    deploy_json=$(clasp deployments --json 2>/dev/null || echo "")
+
+    if [ -z "$deploy_json" ]; then
+        return 0
+    fi
 
     local library_ids
-    library_ids=$(echo "$deploy_list" | grep -i "Library" | awk '{print $2}')
+    library_ids=$(echo "$deploy_json" | python - <<'PY'
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+
+deployments = data.get("deployments", [])
+for deployment in deployments:
+    for entry in deployment.get("entryPoints", []):
+        if entry.get("entryPointType") == "LIBRARY":
+            deployment_id = deployment.get("deploymentId")
+            if deployment_id:
+                print(deployment_id)
+            break
+PY
+)
 
     if [ -z "$library_ids" ]; then
         return 0
@@ -424,35 +444,58 @@ remove_library_deployments() {
     done <<< "$library_ids"
 }
 
-# Get the most recent web app deployment ID (ignores library deployments).
-get_webapp_deployment_id() {
-    local deploy_list
-    deploy_list=$(clasp deployments 2>/dev/null || echo "")
+# Get web app deployment IDs ordered newest-first.
+get_webapp_deployment_ids() {
+    local deploy_json
+    deploy_json=$(clasp deployments --json 2>/dev/null || echo "")
 
-    local webapp_line
-    webapp_line=$(echo "$deploy_list" | grep -i "Web App" | tail -1)
-
-    if [ -n "$webapp_line" ]; then
-        echo "$webapp_line" | awk '{print $2}'
-    else
-        echo ""
+    if [ -z "$deploy_json" ]; then
+        return 0
     fi
+
+    echo "$deploy_json" | python - <<'PY'
+import json, sys
+from datetime import datetime
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+
+deployments = data.get("deployments", [])
+webapps = []
+
+for deployment in deployments:
+    entry_points = deployment.get("entryPoints", [])
+    if any(entry.get("entryPointType") == "WEB_APP" for entry in entry_points):
+        webapps.append(deployment)
+
+def sort_key(item):
+    return item.get("updateTime") or ""
+
+webapps.sort(key=sort_key, reverse=True)
+
+for deployment in webapps:
+    deployment_id = deployment.get("deploymentId")
+    if deployment_id:
+        print(deployment_id)
+PY
 }
 
-# Keep only the most recent web app deployment active.
-remove_extra_webapp_deployments() {
-    local deploy_list
-    deploy_list=$(clasp deployments 2>/dev/null || echo "")
+# Get the most recent web app deployment ID (ignores library deployments).
+get_webapp_deployment_id() {
+    get_webapp_deployment_ids | head -1
+}
 
+# Keep only the specified web app deployment active.
+remove_extra_webapp_deployments() {
+    local keep_id="$1"
     local webapp_ids
-    webapp_ids=$(echo "$deploy_list" | grep -i "Web App" | awk '{print $2}')
+    webapp_ids=$(get_webapp_deployment_ids)
 
     if [ -z "$webapp_ids" ]; then
         return 0
     fi
-
-    local keep_id
-    keep_id=$(echo "$webapp_ids" | tail -1)
 
     while read -r deploy_id; do
         if [ -n "$deploy_id" ] && [ "$deploy_id" != "$keep_id" ]; then
@@ -473,18 +516,21 @@ deploy_webapp() {
     DEPLOY_ID=$(get_webapp_deployment_id)
 
     if [ -n "$DEPLOY_ID" ]; then
-        print_info "Found existing web app deployment - updating..."
-        clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>/dev/null || \
-        clasp deploy --description "Deploy $(date +%Y-%m-%d)"
+        print_info "Found existing web app deployment - updating in place..."
+        if ! clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>/dev/null; then
+            print_warning "Web app update failed; keeping existing deployment without creating a new one."
+        fi
     else
         print_info "No web app deployment found - creating one..."
         clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)"
+        DEPLOY_ID=$(get_webapp_deployment_id)
     fi
 
-    remove_extra_webapp_deployments
+    if [ -n "$DEPLOY_ID" ]; then
+        remove_extra_webapp_deployments "$DEPLOY_ID"
+    fi
 
     # Get deployment URL (web app only)
-    DEPLOY_ID=$(get_webapp_deployment_id)
 
     if [ -n "$DEPLOY_ID" ]; then
         WEBAPP_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
