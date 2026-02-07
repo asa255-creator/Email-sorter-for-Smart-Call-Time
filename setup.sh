@@ -52,12 +52,57 @@ print_info() { echo -e "${BLUE}→ $1${NC}"; }
 # PULL LATEST CODE
 # ============================================================================
 
+# Config files to preserve across updates
+CONFIG_FILES=(
+    "src/.clasp.json"
+    "central-hub/.clasp.json"
+    "central-hub/.hub_url"
+)
+
+# Backup config files to /tmp before reset
+backup_config_files() {
+    local backup_dir="/tmp/sct_config_backup_$$"
+    mkdir -p "$backup_dir"
+
+    for file in "${CONFIG_FILES[@]}"; do
+        if [ -f "$SCRIPT_DIR/$file" ]; then
+            mkdir -p "$backup_dir/$(dirname "$file")"
+            cp "$SCRIPT_DIR/$file" "$backup_dir/$file"
+        fi
+    done
+
+    echo "$backup_dir"
+}
+
+# Restore config files from backup
+restore_config_files() {
+    local backup_dir="$1"
+
+    if [ ! -d "$backup_dir" ]; then
+        return
+    fi
+
+    for file in "${CONFIG_FILES[@]}"; do
+        if [ -f "$backup_dir/$file" ]; then
+            mkdir -p "$SCRIPT_DIR/$(dirname "$file")"
+            cp "$backup_dir/$file" "$SCRIPT_DIR/$file"
+        fi
+    done
+
+    # Clean up backup
+    rm -rf "$backup_dir"
+}
+
 pull_latest() {
     print_info "Checking for updates..."
 
     if [ -d ".git" ]; then
-        # Fetch and show status
-        git fetch origin 2>/dev/null || true
+        # Fetch latest from remote
+        if ! git fetch origin 2>/dev/null; then
+            print_warning "Could not fetch from remote (network issue?)"
+            echo ""
+            return
+        fi
 
         # Try to get current branch
         CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
@@ -71,19 +116,22 @@ pull_latest() {
             print_info "Branch: $CURRENT_BRANCH (no remote tracking)"
         elif [ "$LOCAL" != "$REMOTE" ]; then
             print_warning "Updates available on $CURRENT_BRANCH"
-            read -p "Pull latest code? (y/n): " PULL_CHOICE
+            read -p "Update to latest code? (y/n): " PULL_CHOICE
             if [ "$PULL_CHOICE" = "y" ] || [ "$PULL_CHOICE" = "Y" ]; then
-                # Capture both stdout and stderr
-                PULL_OUTPUT=$(git pull origin "$CURRENT_BRANCH" 2>&1)
-                PULL_STATUS=$?
+                # Backup config files
+                BACKUP_DIR=$(backup_config_files)
+                print_info "Config files backed up"
 
-                if [ $PULL_STATUS -eq 0 ]; then
+                # Hard reset to remote (always succeeds, no merge conflicts)
+                if git reset --hard "origin/$CURRENT_BRANCH" 2>/dev/null; then
                     print_success "Updated to latest"
+
+                    # Restore config files
+                    restore_config_files "$BACKUP_DIR"
+                    print_info "Config files restored"
                 else
-                    print_warning "Pull had issues:"
-                    echo "$PULL_OUTPUT" | head -5
-                    echo ""
-                    print_info "Continuing with local code"
+                    print_warning "Reset failed - continuing with local code"
+                    restore_config_files "$BACKUP_DIR"
                 fi
             fi
         else
@@ -410,24 +458,6 @@ get_webapp_url() {
     fi
 }
 
-# Check if webhook URL has changed since last registration
-check_webhook_changed() {
-    local current_url="$1"
-    local reg_file="$SRC_DIR/.hub_registered"
-
-    if [ ! -f "$reg_file" ]; then
-        return 0  # Not registered yet, needs registration
-    fi
-
-    local saved_webhook=$(grep "^webhook_url=" "$reg_file" 2>/dev/null | cut -d'=' -f2-)
-
-    if [ "$current_url" != "$saved_webhook" ]; then
-        return 0  # URL changed, needs update
-    fi
-
-    return 1  # No change
-}
-
 # Register or update registration with Hub
 register_with_hub() {
     local webapp_url="$1"
@@ -468,27 +498,32 @@ register_with_hub() {
     if echo "$response" | grep -q '"success":true'; then
         print_success "Registered with Hub successfully"
 
-        # Save registration info locally
-        cat > "$SRC_DIR/.hub_registered" << EOF
-# Smart Call Time - Hub Registration
-# Generated: $(date)
-hub_url=$hub_url
-webhook_url=$webapp_url
-instance_name=$instance_name
-email=$user_email
-EOF
-        print_info "Registration saved to src/.hub_registered"
-
         # Check if response mentions update vs new registration
         if echo "$response" | grep -q '"message":"Registration updated"'; then
             print_info "Updated existing registration"
+        else
+            print_info "New registration created"
         fi
+
+        # Note: Registration data is stored on Hub's Google Sheet
+        # No local file needed
 
         return 0
     else
         print_error "Hub registration failed"
         echo "Response: $response"
         return 1
+    fi
+}
+
+# Get Hub URL from central-hub/.hub_url or use default
+get_hub_url() {
+    local hub_url_file="$SCRIPT_DIR/central-hub/.hub_url"
+
+    if [ -f "$hub_url_file" ]; then
+        cat "$hub_url_file"
+    else
+        echo "$DEFAULT_HUB_URL"
     fi
 }
 
@@ -505,65 +540,37 @@ prompt_hub_registration() {
     echo -e "${YELLOW}Hub Registration${NC}"
     echo "───────────────────────────────────────────────────────"
 
-    # Check if already registered and if URL changed
-    local reg_file="$SRC_DIR/.hub_registered"
+    # Get Hub URL (from local .hub_url file or default)
+    local detected_hub_url=$(get_hub_url)
 
-    if [ -f "$reg_file" ]; then
-        local saved_hub=$(grep "^hub_url=" "$reg_file" 2>/dev/null | cut -d'=' -f2-)
-        local saved_webhook=$(grep "^webhook_url=" "$reg_file" 2>/dev/null | cut -d'=' -f2-)
+    echo "Your webhook URL: $webapp_url"
+    echo ""
 
-        echo "Current registration:"
-        echo "  Hub: $saved_hub"
-        echo "  Webhook: $saved_webhook"
+    read -p "Register/update with Hub? (y/n): " DO_REG
+
+    if [ "$DO_REG" = "y" ] || [ "$DO_REG" = "Y" ]; then
         echo ""
+        echo "Hub URL options:"
+        echo -e "  Detected: ${CYAN}$detected_hub_url${NC}"
+        echo ""
+        read -p "Use this Hub URL? (y/n): " USE_DETECTED
 
-        if [ "$webapp_url" != "$saved_webhook" ]; then
-            print_warning "Webhook URL has changed!"
-            echo "  Old: $saved_webhook"
-            echo "  New: $webapp_url"
-            echo ""
-            echo "You should update your Hub registration."
-            read -p "Update Hub registration? (y/n): " UPDATE_REG
-
-            if [ "$UPDATE_REG" = "y" ] || [ "$UPDATE_REG" = "Y" ]; then
-                read -p "Use same Hub URL? (y/n): " SAME_HUB
-                if [ "$SAME_HUB" = "y" ] || [ "$SAME_HUB" = "Y" ]; then
-                    register_with_hub "$webapp_url" "$saved_hub"
-                else
-                    echo ""
-                    echo "Enter Hub URL (or press Enter for default):"
-                    echo -e "Default: ${CYAN}$DEFAULT_HUB_URL${NC}"
-                    read -p "Hub URL: " CUSTOM_HUB
-                    local hub_url="${CUSTOM_HUB:-$DEFAULT_HUB_URL}"
-                    register_with_hub "$webapp_url" "$hub_url"
-                fi
-            else
-                print_warning "Skipped - Hub still has old webhook URL"
-            fi
+        local hub_url
+        if [ "$USE_DETECTED" = "y" ] || [ "$USE_DETECTED" = "Y" ]; then
+            hub_url="$detected_hub_url"
         else
-            print_success "Already registered (URL unchanged)"
-            read -p "Re-register anyway? (y/n): " REREG
-            if [ "$REREG" = "y" ] || [ "$REREG" = "Y" ]; then
-                register_with_hub "$webapp_url" "$saved_hub"
+            echo ""
+            read -p "Enter Hub URL: " hub_url
+            if [ -z "$hub_url" ]; then
+                hub_url="$detected_hub_url"
             fi
         fi
+
+        register_with_hub "$webapp_url" "$hub_url"
     else
-        # First time registration
-        echo "Your instance is not registered with a Hub yet."
-        echo ""
-        read -p "Register with Hub now? (y/n): " DO_REG
-
-        if [ "$DO_REG" = "y" ] || [ "$DO_REG" = "Y" ]; then
-            echo ""
-            echo "Enter Hub URL (or press Enter for default):"
-            echo -e "Default: ${CYAN}$DEFAULT_HUB_URL${NC}"
-            read -p "Hub URL: " CUSTOM_HUB
-            local hub_url="${CUSTOM_HUB:-$DEFAULT_HUB_URL}"
-            register_with_hub "$webapp_url" "$hub_url"
-        else
-            print_info "Skipped Hub registration"
-            echo "You can register later by running setup again."
-        fi
+        print_info "Skipped Hub registration"
+        echo "You can register later by running setup again."
+        echo "Note: Registration data is stored on the Hub's Google Sheet."
     fi
 }
 
@@ -603,6 +610,9 @@ show_completion() {
         echo ""
         if [ -f "$SRC_DIR/.hub_url" ]; then
             echo -e "Hub URL: ${YELLOW}$(cat "$SRC_DIR/.hub_url")${NC}"
+            echo ""
+            echo "This URL is saved to central-hub/.hub_url"
+            echo "User instances will use it for registration."
         fi
     else
         echo "Next steps for User Instance:"
@@ -612,19 +622,8 @@ show_completion() {
         echo "  3. Grant permissions when prompted"
         echo "  4. Configure labels on the Labels sheet"
         echo ""
-
-        # Show Hub registration status
-        if [ -f "$SRC_DIR/.hub_registered" ]; then
-            local hub_url=$(grep "^hub_url=" "$SRC_DIR/.hub_registered" 2>/dev/null | cut -d'=' -f2-)
-            local instance=$(grep "^instance_name=" "$SRC_DIR/.hub_registered" 2>/dev/null | cut -d'=' -f2-)
-            echo -e "Hub Registration: ${GREEN}Connected${NC}"
-            echo "  Instance: $instance"
-            echo "  Hub: $hub_url"
-        else
-            echo -e "Hub Registration: ${YELLOW}Not connected${NC}"
-            echo "  Run setup again to register with a Hub"
-        fi
-        echo ""
+        echo "Hub registration data is stored on the Hub's Google Sheet."
+        echo "Run setup and select 'Register with Hub' to connect."
     fi
     echo ""
 }
@@ -639,22 +638,19 @@ clean_start() {
     echo ""
     echo "Files to be removed:"
     [ -f "$SCRIPT_DIR/src/.clasp.json" ] && echo "  - src/.clasp.json"
-    [ -f "$SCRIPT_DIR/src/.hub_registered" ] && echo "  - src/.hub_registered"
     [ -f "$SCRIPT_DIR/central-hub/.clasp.json" ] && echo "  - central-hub/.clasp.json"
     [ -f "$SCRIPT_DIR/central-hub/.hub_url" ] && echo "  - central-hub/.hub_url"
-    [ -f "$SCRIPT_DIR/central-hub/.chat_space_id" ] && echo "  - central-hub/.chat_space_id"
     [ -f "$HOME/.clasp.json" ] && echo "  - ~/.clasp.json (home directory)"
     echo ""
     echo "This does NOT delete your Google Sheets or Apps Script projects."
+    echo "Registration data is stored on the Hub's Google Sheet."
     echo ""
     read -p "Continue? (yes/no): " CONFIRM
 
     if [ "$CONFIRM" = "yes" ]; then
         rm -f "$SCRIPT_DIR/src/.clasp.json"
-        rm -f "$SCRIPT_DIR/src/.hub_registered"
         rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
         rm -f "$SCRIPT_DIR/central-hub/.hub_url"
-        rm -f "$SCRIPT_DIR/central-hub/.chat_space_id"
         rm -f "$HOME/.clasp.json"
         echo ""
         print_success "Local configuration removed"
@@ -694,12 +690,65 @@ main() {
 }
 
 # ============================================================================
+# FULL RESET
+# ============================================================================
+
+full_reset() {
+    print_header
+    print_warning "FULL RESET: This will delete ALL local config and reset to remote code."
+    echo ""
+    echo "This will:"
+    echo "  1. Delete all local config files (.clasp.json, .hub_url)"
+    echo "  2. Fetch latest code from remote"
+    echo "  3. Hard reset all local code to match remote exactly"
+    echo ""
+    echo "Your Google Sheets and Apps Script projects are NOT affected."
+    echo "Registration data on the Hub is NOT affected."
+    echo ""
+    read -p "Continue with full reset? (yes/no): " CONFIRM
+
+    if [ "$CONFIRM" = "yes" ]; then
+        # Delete local config files
+        rm -f "$SCRIPT_DIR/src/.clasp.json"
+        rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
+        rm -f "$SCRIPT_DIR/central-hub/.hub_url"
+        rm -f "$HOME/.clasp.json"
+        print_success "Config files removed"
+
+        # Fetch and hard reset
+        print_info "Fetching latest from remote..."
+        if git fetch origin 2>/dev/null; then
+            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+            if git reset --hard "origin/$CURRENT_BRANCH" 2>/dev/null; then
+                print_success "Reset to origin/$CURRENT_BRANCH"
+            else
+                print_error "Reset failed"
+                exit 1
+            fi
+        else
+            print_error "Could not fetch from remote"
+            exit 1
+        fi
+
+        echo ""
+        print_success "Full reset complete!"
+        echo ""
+        echo "Run ./setup.sh to set up again."
+    else
+        print_info "Cancelled"
+    fi
+}
+
+# ============================================================================
 # ENTRY POINT
 # ============================================================================
 
 case "${1:-}" in
     --clean)
         clean_start
+        ;;
+    --reset)
+        full_reset
         ;;
     --help|-h)
         echo "Smart Call Time - Setup Script"
@@ -708,12 +757,14 @@ case "${1:-}" in
         echo ""
         echo "Options:"
         echo "  (none)    Interactive setup menu"
-        echo "  --clean   Remove local config files and start fresh"
+        echo "  --clean   Remove local config files (keep code)"
+        echo "  --reset   Full reset: delete config AND reset code to remote"
         echo "  --help    Show this help"
         echo ""
         echo "Examples:"
         echo "  ./setup.sh           # Run interactive setup"
-        echo "  ./setup.sh --clean   # Clear config and start over"
+        echo "  ./setup.sh --clean   # Clear config only"
+        echo "  ./setup.sh --reset   # Nuclear option - full reset"
         ;;
     *)
         main
