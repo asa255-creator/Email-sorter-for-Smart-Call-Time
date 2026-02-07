@@ -62,22 +62,32 @@ pull_latest() {
         # Try to get current branch
         CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 
-        # Check for updates
+        # Check for updates on current branch
         LOCAL=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
         REMOTE=$(git rev-parse "origin/$CURRENT_BRANCH" 2>/dev/null || echo "unknown")
 
-        if [ "$LOCAL" != "$REMOTE" ] && [ "$REMOTE" != "unknown" ]; then
+        if [ "$REMOTE" = "unknown" ]; then
+            # Remote branch doesn't exist yet (new feature branch)
+            print_info "Branch: $CURRENT_BRANCH (no remote tracking)"
+        elif [ "$LOCAL" != "$REMOTE" ]; then
             print_warning "Updates available on $CURRENT_BRANCH"
             read -p "Pull latest code? (y/n): " PULL_CHOICE
             if [ "$PULL_CHOICE" = "y" ] || [ "$PULL_CHOICE" = "Y" ]; then
-                if git pull origin "$CURRENT_BRANCH" 2>/dev/null; then
+                # Capture both stdout and stderr
+                PULL_OUTPUT=$(git pull origin "$CURRENT_BRANCH" 2>&1)
+                PULL_STATUS=$?
+
+                if [ $PULL_STATUS -eq 0 ]; then
                     print_success "Updated to latest"
                 else
-                    print_warning "Could not pull (continuing with local)"
+                    print_warning "Pull had issues:"
+                    echo "$PULL_OUTPUT" | head -5
+                    echo ""
+                    print_info "Continuing with local code"
                 fi
             fi
         else
-            print_success "Code is up to date"
+            print_success "Code is up to date on $CURRENT_BRANCH"
         fi
     else
         print_warning "Not a git repo - skipping update check"
