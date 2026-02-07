@@ -439,6 +439,29 @@ get_webapp_deployment_id() {
     fi
 }
 
+# Keep only the most recent web app deployment active.
+remove_extra_webapp_deployments() {
+    local deploy_list
+    deploy_list=$(clasp deployments 2>/dev/null || echo "")
+
+    local webapp_ids
+    webapp_ids=$(echo "$deploy_list" | grep -i "Web App" | awk '{print $2}')
+
+    if [ -z "$webapp_ids" ]; then
+        return 0
+    fi
+
+    local keep_id
+    keep_id=$(echo "$webapp_ids" | tail -1)
+
+    while read -r deploy_id; do
+        if [ -n "$deploy_id" ] && [ "$deploy_id" != "$keep_id" ]; then
+            clasp undeploy "$deploy_id" 2>/dev/null || \
+            print_warning "Could not remove extra web app deployment $deploy_id"
+        fi
+    done <<< "$webapp_ids"
+}
+
 deploy_webapp() {
     print_info "Deploying as web app..."
 
@@ -457,6 +480,8 @@ deploy_webapp() {
         print_info "No web app deployment found - creating one..."
         clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)"
     fi
+
+    remove_extra_webapp_deployments
 
     # Get deployment URL (web app only)
     DEPLOY_ID=$(get_webapp_deployment_id)
