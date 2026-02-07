@@ -24,7 +24,7 @@ function onMessage(event) {
   try {
     const message = event.message.text;
     const sender = event.user.email || event.user.displayName;
-    const spaceName = event.space.name;
+    const messageName = event.message.name; // Track for cleanup
 
     logHub('MESSAGE_RECEIVED', `From: ${sender}, Message: ${message.substring(0, 100)}...`);
 
@@ -32,6 +32,11 @@ function onMessage(event) {
     const routeResult = routeMessage(message, sender);
 
     if (routeResult.success) {
+      // Track this AI response message for later cleanup
+      if (messageName && routeResult.instanceName) {
+        appendMessageToPending(routeResult.instanceName, messageName);
+      }
+
       return {
         text: `Routed to ${routeResult.instanceName}: ${routeResult.labels}`
       };

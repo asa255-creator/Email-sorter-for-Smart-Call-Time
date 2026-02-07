@@ -142,6 +142,38 @@ function getPendingRequestByEmailId(instanceName, emailId) {
 }
 
 /**
+ * Appends a message name to an existing pending request.
+ * Used to track AI response messages for later cleanup.
+ *
+ * @param {string} instanceName - User's instance name
+ * @param {string} messageName - Chat message name to add
+ * @returns {boolean} True if found and updated
+ */
+function appendMessageToPending(instanceName, messageName) {
+  const sheet = getOrCreatePendingSheet();
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) return false;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+
+  // Find the most recent pending request for this instance
+  for (let i = data.length - 1; i >= 0; i--) {
+    if (data[i][1] === instanceName && data[i][3] === 'pending') {
+      const metadata = JSON.parse(data[i][5] || '{}');
+      metadata.messageNames = metadata.messageNames || [];
+      metadata.messageNames.push(messageName);
+
+      sheet.getRange(i + 2, 6).setValue(JSON.stringify(metadata));
+      logHub('MESSAGE_TRACKED', `${instanceName}: +${messageName}`);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Removes a pending request from the sheet.
  * Called after cleanup is complete.
  *
