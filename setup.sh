@@ -25,7 +25,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Default Hub URL (can be overridden during setup)
-DEFAULT_HUB_URL="https://script.google.com/macros/library/d/1ugWVACllgPu1i11H5oZ0w1_XwevLqzp-KkfRYPW6aWrB9nxwSyy1tkHJ/2"
+DEFAULT_HUB_URL=""  # Must be set to your Hub's web app URL (https://script.google.com/macros/s/.../exec)
 
 # Fix Node.js v25 memory issues
 export NODE_OPTIONS="--max-old-space-size=8192"
@@ -52,11 +52,10 @@ print_info() { echo -e "${BLUE}→ $1${NC}"; }
 # PULL LATEST CODE
 # ============================================================================
 
-# Config files to preserve across updates
+# Config files to preserve across updates (local-only files not tracked in git)
 CONFIG_FILES=(
     "src/.clasp.json"
     "central-hub/.clasp.json"
-    "central-hub/.hub_url"
 )
 
 # Backup config files to /tmp before reset
@@ -260,6 +259,15 @@ create_new_project() {
     # Deploy as web app
     deploy_webapp
 
+    # Pre-authorize the script
+    echo ""
+    read -p "Authorize the script now? (y/n): " AUTH_CHOICE
+    if [ "$AUTH_CHOICE" = "y" ] || [ "$AUTH_CHOICE" = "Y" ]; then
+        pre_authorize
+    else
+        print_info "Skipped - you'll be prompted to authorize when you first use the Sheet"
+    fi
+
     # Register with Hub (User instances only)
     if [ "$PROJECT_TYPE" = "user" ]; then
         prompt_hub_registration
@@ -430,6 +438,9 @@ deploy_webapp() {
             echo -e "${YELLOW}$WEBAPP_URL${NC}"
             echo "$WEBAPP_URL" > "$SRC_DIR/.hub_url"
             print_info "URL saved to central-hub/.hub_url"
+
+            # Commit and push the Hub URL so user instances auto-detect it
+            commit_hub_url "$WEBAPP_URL"
         else
             echo -e "Webhook URL (for Hub registration):"
             echo -e "${YELLOW}$WEBAPP_URL${NC}"
@@ -438,6 +449,116 @@ deploy_webapp() {
     else
         print_warning "Could not determine deployment URL"
         echo "Run 'clasp deployments' in $SRC_DIR to see deployments"
+    fi
+}
+
+# ============================================================================
+# COMMIT HUB URL TO REPO
+# ============================================================================
+
+# After Hub deployment, commit and push .hub_url so user instances auto-detect it
+commit_hub_url() {
+    local webapp_url="$1"
+
+    cd "$SCRIPT_DIR"
+
+    if [ ! -d ".git" ]; then
+        print_warning "Not a git repo - Hub URL saved locally only"
+        return
+    fi
+
+    echo ""
+    print_info "Saving Hub URL to repository..."
+
+    # Stage and commit the .hub_url file
+    if git add central-hub/.hub_url 2>/dev/null; then
+        if git diff --cached --quiet 2>/dev/null; then
+            print_info "Hub URL unchanged - no commit needed"
+        else
+            git commit -m "Update Hub web app URL for user instances" -- central-hub/.hub_url 2>/dev/null
+            print_success "Hub URL committed to repo"
+
+            # Push so user instances get it on next pull/setup
+            local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+            if git push origin "$current_branch" 2>/dev/null; then
+                print_success "Hub URL pushed - user instances will auto-detect it"
+            else
+                print_warning "Could not push Hub URL (push manually or users can enter it)"
+            fi
+        fi
+    else
+        print_warning "Could not stage Hub URL file"
+    fi
+
+    cd "$SRC_DIR"
+}
+
+# ============================================================================
+# PRE-AUTHORIZE SCRIPT
+# ============================================================================
+
+# Attempt to pre-authorize the Apps Script so the user doesn't face a consent
+# popup later when opening the Sheet.
+pre_authorize() {
+    print_info "Attempting to pre-authorize script..."
+
+    cd "$SRC_DIR"
+
+    # clasp run requires the Apps Script API to be enabled on the GCP project.
+    # Try running a lightweight function - if it works, authorization is handled.
+    # If it fails, fall back to opening the script in the browser.
+
+    local run_output
+    run_output=$(clasp run authorize 2>&1)
+    local run_exit=$?
+
+    if [ $run_exit -eq 0 ]; then
+        print_success "Script authorized successfully"
+        return 0
+    fi
+
+    # clasp run failed - check why
+    if echo "$run_output" | grep -qi "not enabled\|API has not been used\|Apps Script API"; then
+        print_info "Apps Script API not enabled - opening browser for authorization"
+    elif echo "$run_output" | grep -qi "authorization\|consent\|PERMISSION_DENIED"; then
+        print_info "Authorization needed - opening browser"
+    else
+        print_info "Could not run remotely - opening browser for authorization"
+    fi
+
+    # Get the script URL from .clasp.json
+    local script_id=""
+    if [ -f "$SRC_DIR/.clasp.json" ]; then
+        script_id=$(grep -o '"scriptId":"[^"]*"' "$SRC_DIR/.clasp.json" 2>/dev/null | cut -d'"' -f4)
+    fi
+
+    if [ -n "$script_id" ]; then
+        local script_url="https://script.google.com/d/$script_id/edit"
+        echo ""
+        echo "  Opening the Apps Script editor to trigger authorization..."
+        echo -e "  URL: ${CYAN}$script_url${NC}"
+        echo ""
+
+        # Try to open in browser
+        if command -v open &> /dev/null; then
+            open "$script_url"
+        elif command -v xdg-open &> /dev/null; then
+            xdg-open "$script_url"
+        elif command -v wslview &> /dev/null; then
+            wslview "$script_url"
+        else
+            echo "  Could not auto-open browser. Please open the URL above manually."
+        fi
+
+        echo "  In the script editor:"
+        echo "    1. Select the 'authorize' function from the dropdown"
+        echo "    2. Click Run"
+        echo "    3. Approve the permissions when prompted"
+        echo ""
+        read -p "Press Enter after you've authorized the script..."
+        print_success "Authorization step complete"
+    else
+        print_warning "Could not determine Script ID - authorize manually from the Sheet"
     fi
 }
 
@@ -516,14 +637,33 @@ register_with_hub() {
     fi
 }
 
+# Validate that a URL is a web app URL, not a library URL
+validate_hub_url() {
+    local url="$1"
+    if echo "$url" | grep -q "/macros/library/"; then
+        print_error "Hub URL is a library URL, not a web app URL!"
+        echo "  Got: $url"
+        echo ""
+        echo "  Library URLs (/macros/library/d/.../N) cannot receive HTTP requests."
+        echo "  You need the web app URL which looks like:"
+        echo "    https://script.google.com/macros/s/DEPLOYMENT_ID/exec"
+        echo ""
+        echo "  To get the correct URL, run 'clasp deployments' in the central-hub/ directory."
+        return 1
+    fi
+    return 0
+}
+
 # Get Hub URL from central-hub/.hub_url or use default
 get_hub_url() {
     local hub_url_file="$SCRIPT_DIR/central-hub/.hub_url"
 
     if [ -f "$hub_url_file" ]; then
         cat "$hub_url_file"
-    else
+    elif [ -n "$DEFAULT_HUB_URL" ]; then
         echo "$DEFAULT_HUB_URL"
+    else
+        echo ""
     fi
 }
 
@@ -563,6 +703,28 @@ prompt_hub_registration() {
             read -p "Enter Hub URL: " hub_url
             if [ -z "$hub_url" ]; then
                 hub_url="$detected_hub_url"
+            fi
+        fi
+
+        # Validate URL format before attempting registration
+        if [ -z "$hub_url" ]; then
+            print_error "No Hub URL available."
+            echo "  Deploy the Central Hub first, then either:"
+            echo "    - Place the web app URL in central-hub/.hub_url"
+            echo "    - Or set DEFAULT_HUB_URL in setup.sh"
+            return
+        fi
+
+        if ! validate_hub_url "$hub_url"; then
+            read -p "Enter the correct web app URL (or press Enter to skip): " hub_url
+            if [ -z "$hub_url" ]; then
+                print_info "Skipped Hub registration"
+                return
+            fi
+            # Validate the manually entered URL too
+            if ! validate_hub_url "$hub_url"; then
+                print_error "Still not a valid web app URL. Skipping registration."
+                return
             fi
         fi
 
@@ -611,16 +773,15 @@ show_completion() {
         if [ -f "$SRC_DIR/.hub_url" ]; then
             echo -e "Hub URL: ${YELLOW}$(cat "$SRC_DIR/.hub_url")${NC}"
             echo ""
-            echo "This URL is saved to central-hub/.hub_url"
-            echo "User instances will use it for registration."
+            echo "This URL is saved to central-hub/.hub_url and pushed to the repo."
+            echo "User instances will auto-detect it on next setup."
         fi
     else
         echo "Next steps for User Instance:"
         echo ""
         echo "  1. Open the Google Sheet and REFRESH the page"
         echo "  2. Click: Smart Call Time > Email Sorter > Setup"
-        echo "  3. Grant permissions when prompted"
-        echo "  4. Configure labels on the Labels sheet"
+        echo "  3. Configure labels on the Labels sheet"
         echo ""
         echo "Hub registration data is stored on the Hub's Google Sheet."
         echo "Run setup and select 'Register with Hub' to connect."
@@ -639,18 +800,17 @@ clean_start() {
     echo "Files to be removed:"
     [ -f "$SCRIPT_DIR/src/.clasp.json" ] && echo "  - src/.clasp.json"
     [ -f "$SCRIPT_DIR/central-hub/.clasp.json" ] && echo "  - central-hub/.clasp.json"
-    [ -f "$SCRIPT_DIR/central-hub/.hub_url" ] && echo "  - central-hub/.hub_url"
     [ -f "$HOME/.clasp.json" ] && echo "  - ~/.clasp.json (home directory)"
     echo ""
     echo "This does NOT delete your Google Sheets or Apps Script projects."
-    echo "Registration data is stored on the Hub's Google Sheet."
+    echo "Hub URL (central-hub/.hub_url) is preserved since it's shared via git."
+    echo "Registration data on the Hub is NOT affected."
     echo ""
     read -p "Continue? (yes/no): " CONFIRM
 
     if [ "$CONFIRM" = "yes" ]; then
         rm -f "$SCRIPT_DIR/src/.clasp.json"
         rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
-        rm -f "$SCRIPT_DIR/central-hub/.hub_url"
         rm -f "$HOME/.clasp.json"
         echo ""
         print_success "Local configuration removed"
@@ -698,7 +858,7 @@ full_reset() {
     print_warning "FULL RESET: This will delete ALL local config and reset to remote code."
     echo ""
     echo "This will:"
-    echo "  1. Delete all local config files (.clasp.json, .hub_url)"
+    echo "  1. Delete local config files (.clasp.json)"
     echo "  2. Fetch latest code from remote"
     echo "  3. Hard reset all local code to match remote exactly"
     echo ""
@@ -708,10 +868,9 @@ full_reset() {
     read -p "Continue with full reset? (yes/no): " CONFIRM
 
     if [ "$CONFIRM" = "yes" ]; then
-        # Delete local config files
+        # Delete local config files (hub_url is tracked in git, preserved by reset)
         rm -f "$SCRIPT_DIR/src/.clasp.json"
         rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
-        rm -f "$SCRIPT_DIR/central-hub/.hub_url"
         rm -f "$HOME/.clasp.json"
         print_success "Config files removed"
 
