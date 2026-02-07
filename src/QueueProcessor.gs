@@ -197,6 +197,9 @@ function processQueueRow(rowNumber) {
     // Apply labels
     const result = applyLabelsToEmail(emailId, labels);
 
+    // Notify Hub that processing is complete (triggers Chat message cleanup)
+    notifyHubComplete(emailId);
+
     // Success - delete the row from queue
     sheet.deleteRow(rowNumber);
 
