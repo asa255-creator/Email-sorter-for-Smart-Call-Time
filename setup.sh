@@ -715,8 +715,9 @@ register_with_hub() {
     local instance_name=$(echo "$user_email" | cut -d'@' -f1 | tr -cd 'a-zA-Z0-9_')
 
     # Make registration request
-    local response=$(curl -s -X POST "$hub_url" \
+    local response=$(curl -s -L -X POST "$hub_url" \
         -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
         -d "{
             \"action\": \"register\",
             \"email\": \"$user_email\",
