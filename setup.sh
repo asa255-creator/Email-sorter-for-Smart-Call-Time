@@ -402,27 +402,40 @@ push_code() {
 # DEPLOY WEB APP
 # ============================================================================
 
+# Get the most recent web app deployment ID (ignores library deployments).
+get_webapp_deployment_id() {
+    local deploy_list
+    deploy_list=$(clasp deployments 2>/dev/null || echo "")
+
+    local webapp_line
+    webapp_line=$(echo "$deploy_list" | grep -i "Web App" | tail -1)
+
+    if [ -n "$webapp_line" ]; then
+        echo "$webapp_line" | awk '{print $2}'
+    else
+        echo ""
+    fi
+}
+
 deploy_webapp() {
     print_info "Deploying as web app..."
 
     cd "$SRC_DIR"
 
     # Check existing deployments
-    DEPLOY_LIST=$(clasp deployments 2>/dev/null || echo "")
-    EXISTING=$(echo "$DEPLOY_LIST" | grep -c "@" || echo "0")
+    DEPLOY_ID=$(get_webapp_deployment_id)
 
-    if [ "$EXISTING" -gt 0 ]; then
-        print_info "Found existing deployment - updating..."
-        DEPLOY_ID=$(echo "$DEPLOY_LIST" | grep "@" | head -1 | awk '{print $2}')
+    if [ -n "$DEPLOY_ID" ]; then
+        print_info "Found existing web app deployment - updating..."
         clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>/dev/null || \
         clasp deploy --description "Deploy $(date +%Y-%m-%d)"
     else
-        clasp deploy --description "Initial deploy $(date +%Y-%m-%d)"
+        print_info "No web app deployment found - creating one..."
+        clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)"
     fi
 
-    # Get deployment URL
-    DEPLOY_LIST=$(clasp deployments 2>/dev/null || echo "")
-    DEPLOY_ID=$(echo "$DEPLOY_LIST" | grep "@" | tail -1 | awk '{print $2}')
+    # Get deployment URL (web app only)
+    DEPLOY_ID=$(get_webapp_deployment_id)
 
     if [ -n "$DEPLOY_ID" ]; then
         WEBAPP_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
@@ -449,6 +462,7 @@ deploy_webapp() {
     else
         print_warning "Could not determine deployment URL"
         echo "Run 'clasp deployments' in $SRC_DIR to see deployments"
+        echo "Make sure you have an Apps Script web app deployment (not just a library)."
     fi
 }
 
@@ -569,8 +583,8 @@ pre_authorize() {
 # Get the current webapp URL from clasp deployments
 get_webapp_url() {
     cd "$SRC_DIR"
-    local deploy_list=$(clasp deployments 2>/dev/null || echo "")
-    local deploy_id=$(echo "$deploy_list" | grep "@" | tail -1 | awk '{print $2}')
+    local deploy_id
+    deploy_id=$(get_webapp_deployment_id)
 
     if [ -n "$deploy_id" ]; then
         echo "https://script.google.com/macros/s/$deploy_id/exec"
