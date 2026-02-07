@@ -402,6 +402,28 @@ push_code() {
 # DEPLOY WEB APP
 # ============================================================================
 
+# Remove library deployments so web app deployments are the only active webhook targets.
+remove_library_deployments() {
+    local deploy_list
+    deploy_list=$(clasp deployments 2>/dev/null || echo "")
+
+    local library_ids
+    library_ids=$(echo "$deploy_list" | grep -i "Library" | awk '{print $2}')
+
+    if [ -z "$library_ids" ]; then
+        return 0
+    fi
+
+    print_info "Removing existing library deployments..."
+
+    while read -r deploy_id; do
+        if [ -n "$deploy_id" ]; then
+            clasp undeploy "$deploy_id" 2>/dev/null || \
+            print_warning "Could not remove library deployment $deploy_id"
+        fi
+    done <<< "$library_ids"
+}
+
 # Get the most recent web app deployment ID (ignores library deployments).
 get_webapp_deployment_id() {
     local deploy_list
@@ -421,6 +443,8 @@ deploy_webapp() {
     print_info "Deploying as web app..."
 
     cd "$SRC_DIR"
+
+    remove_library_deployments
 
     # Check existing deployments
     DEPLOY_ID=$(get_webapp_deployment_id)
