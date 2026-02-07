@@ -25,7 +25,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Default Hub URL (can be overridden during setup)
-DEFAULT_HUB_URL="https://script.google.com/macros/library/d/1ugWVACllgPu1i11H5oZ0w1_XwevLqzp-KkfRYPW6aWrB9nxwSyy1tkHJ/2"
+DEFAULT_HUB_URL=""  # Must be set to your Hub's web app URL (https://script.google.com/macros/s/.../exec)
 
 # Fix Node.js v25 memory issues
 export NODE_OPTIONS="--max-old-space-size=8192"
@@ -516,14 +516,33 @@ register_with_hub() {
     fi
 }
 
+# Validate that a URL is a web app URL, not a library URL
+validate_hub_url() {
+    local url="$1"
+    if echo "$url" | grep -q "/macros/library/"; then
+        print_error "Hub URL is a library URL, not a web app URL!"
+        echo "  Got: $url"
+        echo ""
+        echo "  Library URLs (/macros/library/d/.../N) cannot receive HTTP requests."
+        echo "  You need the web app URL which looks like:"
+        echo "    https://script.google.com/macros/s/DEPLOYMENT_ID/exec"
+        echo ""
+        echo "  To get the correct URL, run 'clasp deployments' in the central-hub/ directory."
+        return 1
+    fi
+    return 0
+}
+
 # Get Hub URL from central-hub/.hub_url or use default
 get_hub_url() {
     local hub_url_file="$SCRIPT_DIR/central-hub/.hub_url"
 
     if [ -f "$hub_url_file" ]; then
         cat "$hub_url_file"
-    else
+    elif [ -n "$DEFAULT_HUB_URL" ]; then
         echo "$DEFAULT_HUB_URL"
+    else
+        echo ""
     fi
 }
 
@@ -563,6 +582,28 @@ prompt_hub_registration() {
             read -p "Enter Hub URL: " hub_url
             if [ -z "$hub_url" ]; then
                 hub_url="$detected_hub_url"
+            fi
+        fi
+
+        # Validate URL format before attempting registration
+        if [ -z "$hub_url" ]; then
+            print_error "No Hub URL available."
+            echo "  Deploy the Central Hub first, then either:"
+            echo "    - Place the web app URL in central-hub/.hub_url"
+            echo "    - Or set DEFAULT_HUB_URL in setup.sh"
+            return
+        fi
+
+        if ! validate_hub_url "$hub_url"; then
+            read -p "Enter the correct web app URL (or press Enter to skip): " hub_url
+            if [ -z "$hub_url" ]; then
+                print_info "Skipped Hub registration"
+                return
+            fi
+            # Validate the manually entered URL too
+            if ! validate_hub_url "$hub_url"; then
+                print_error "Still not a valid web app URL. Skipping registration."
+                return
             fi
         fi
 
