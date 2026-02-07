@@ -487,17 +487,15 @@ get_webapp_deployment_id() {
     get_webapp_deployment_ids | head -1
 }
 
-# Keep only the most recent web app deployment active.
+# Keep only the specified web app deployment active.
 remove_extra_webapp_deployments() {
+    local keep_id="$1"
     local webapp_ids
     webapp_ids=$(get_webapp_deployment_ids)
 
     if [ -z "$webapp_ids" ]; then
         return 0
     fi
-
-    local keep_id
-    keep_id=$(echo "$webapp_ids" | head -1)
 
     while read -r deploy_id; do
         if [ -n "$deploy_id" ] && [ "$deploy_id" != "$keep_id" ]; then
@@ -518,18 +516,21 @@ deploy_webapp() {
     DEPLOY_ID=$(get_webapp_deployment_id)
 
     if [ -n "$DEPLOY_ID" ]; then
-        print_info "Found existing web app deployment - updating..."
-        clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>/dev/null || \
-        clasp deploy --description "Deploy $(date +%Y-%m-%d)"
+        print_info "Found existing web app deployment - updating in place..."
+        if ! clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>/dev/null; then
+            print_warning "Web app update failed; keeping existing deployment without creating a new one."
+        fi
     else
         print_info "No web app deployment found - creating one..."
         clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)"
+        DEPLOY_ID=$(get_webapp_deployment_id)
     fi
 
-    remove_extra_webapp_deployments
+    if [ -n "$DEPLOY_ID" ]; then
+        remove_extra_webapp_deployments "$DEPLOY_ID"
+    fi
 
     # Get deployment URL (web app only)
-    DEPLOY_ID=$(get_webapp_deployment_id)
 
     if [ -n "$DEPLOY_ID" ]; then
         WEBAPP_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
