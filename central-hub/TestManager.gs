@@ -116,6 +116,54 @@ function handleTestWebhookSuccess(data) {
 }
 
 // ============================================================================
+// SHEETS CHAT ROUND-TRIP TEST (Hub-initiated)
+// ============================================================================
+
+/**
+ * Tests the full Sheets-Chat round-trip from the Hub side.
+ *
+ * Flow:
+ * 1. Hub sends webhook to User with test_sheets_chat_start
+ * 2. User sends chat: @instanceName:[testId] SHEETS_CHAT_TEST
+ * 3. Hub sees chat (onMessage), sends webhook to User: test_sheets_chat_confirm
+ * 4. User sends chat: @instanceName:[testId] CONFIRMED
+ * 5. Hub sees CONFIRMED (onMessage), deletes both messages, sends completion webhook
+ */
+function testSheetsChatFromHub() {
+  var ui = SpreadsheetApp.getUi();
+  var instanceName = promptForTestInstance(ui);
+
+  if (!instanceName) return;
+
+  var testId = Utilities.getUuid();
+  var payload = {
+    action: 'test_sheets_chat_start',
+    instanceName: instanceName,
+    conversationId: testId,
+    message: 'Start Sheets Chat round-trip test',
+    origin: 'hub'
+  };
+
+  var result = sendWebhookToUser(instanceName, payload);
+
+  if (result.success) {
+    logHub('SHEETS_CHAT_TEST_INITIATED', instanceName + ' [' + testId + ']');
+    ui.alert('Test Initiated',
+      'Sheets Chat round-trip test started for ' + instanceName + '.\n\n' +
+      'Flow:\n' +
+      '1. Webhook sent to User sheet\n' +
+      '2. User will post SHEETS_CHAT_TEST to chat\n' +
+      '3. Hub will detect and send confirm webhook\n' +
+      '4. User will post CONFIRMED to chat\n' +
+      '5. Hub will delete both messages\n\n' +
+      'Check HubLog for progress.',
+      ui.ButtonSet.OK);
+  } else {
+    ui.alert('Failed', 'Could not initiate test: ' + result.error, ui.ButtonSet.OK);
+  }
+}
+
+// ============================================================================
 // HELPERS
 // ============================================================================
 

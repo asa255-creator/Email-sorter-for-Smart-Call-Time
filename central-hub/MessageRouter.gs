@@ -177,18 +177,22 @@ function sendWebhookToUser(instanceName, payload) {
  * @returns {Object} Parsed message with instanceName, labels, emailId
  */
 function parseMessage(message) {
-  const trimmed = message.trim();
+  var trimmed = message.trim();
 
-  // Pattern 1: @instance_name: labels
-  // Pattern 2: instance_name: labels
-  const colonMatch = trimmed.match(/^@?([a-zA-Z0-9_]+):\s*(.+)$/);
+  // For multi-line messages, parse only the first line for routing info
+  var firstLine = trimmed.split('\n')[0].trim();
+
+  // Pattern 1: @instance_name:[conversationId] MESSAGE_TYPE or labels
+  // Pattern 2: @instance_name: [conversationId] MESSAGE_TYPE or labels
+  // Pattern 3: instance_name: [conversationId] MESSAGE_TYPE or labels
+  var colonMatch = firstLine.match(/^@?([a-zA-Z0-9_]+):\s*(.+)$/);
 
   if (colonMatch) {
-    const instanceName = colonMatch[1];
-    const labelsText = colonMatch[2];
+    var instanceName = colonMatch[1];
+    var labelsText = colonMatch[2];
 
-    // Check if there's an email ID in brackets
-    const idMatch = labelsText.match(/\[([^\]]+)\]\s*(.+)/);
+    // Check if there's a conversation/email ID in brackets
+    var idMatch = labelsText.match(/\[([^\]]+)\]\s*(.+)/);
 
     if (idMatch) {
       return {
@@ -205,8 +209,8 @@ function parseMessage(message) {
     };
   }
 
-  // Pattern 3: [emailId] labels
-  const idOnlyMatch = trimmed.match(/^\[([^\]]+)\]\s*(.+)$/);
+  // Pattern 4: [emailId] labels (no instance name)
+  var idOnlyMatch = firstLine.match(/^\[([^\]]+)\]\s*(.+)$/);
 
   if (idOnlyMatch) {
     return {
@@ -216,11 +220,11 @@ function parseMessage(message) {
     };
   }
 
-  // Pattern 4: Just labels (no instance name or email ID)
+  // Pattern 5: Just labels (no instance name or email ID)
   return {
     instanceName: null,
     emailId: null,
-    labels: trimmed
+    labels: firstLine
   };
 }
 
@@ -249,6 +253,76 @@ function validateLabels(labels) {
 }
 
 // ============================================================================
+// MESSAGE TYPE DETECTION
+// ============================================================================
+
+/**
+ * Standard message types used in the consistent chat format.
+ *
+ * CONSISTENT MESSAGE FORMAT:
+ *   @{instanceName}:[{conversationId}] {MESSAGE_TYPE}
+ *
+ * - instanceName: identifies which user sheet sent/should receive the message
+ * - conversationId: groups related messages for cleanup (emailId or UUID)
+ * - MESSAGE_TYPE: identifies what action to take
+ *
+ * This format allows:
+ * - Hub to route to the correct user webhook
+ * - Hub to group and delete all messages in a conversation
+ * - Google Workspace Flow to filter on MESSAGE_TYPE
+ */
+var MESSAGE_TYPES = {
+  // Email processing
+  EMAIL_READY: 'EMAIL_READY',
+  LABEL_RESPONSE: 'LABEL_RESPONSE',
+
+  // Status
+  QUEUE_STARTED: 'QUEUE_STARTED',
+  QUEUE_COMPLETE: 'QUEUE_COMPLETE',
+
+  // Tests
+  TEST_CHAT_CONNECTION: 'TEST_CHAT_CONNECTION',
+  SHEETS_CHAT_TEST: 'SHEETS_CHAT_TEST',
+  CONFIRMED: 'CONFIRMED'
+};
+
+/**
+ * Extracts the message type from the parsed labels/payload field.
+ *
+ * @param {string} payload - The labels/payload text from parseMessage
+ * @returns {string|null} The message type or null if not recognized
+ */
+function getMessageType(payload) {
+  if (!payload) return null;
+  var upper = payload.trim().toUpperCase();
+
+  for (var key in MESSAGE_TYPES) {
+    if (upper === MESSAGE_TYPES[key] || upper.startsWith(MESSAGE_TYPES[key])) {
+      return MESSAGE_TYPES[key];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Returns true if the message type is a test/system message (not a label response).
+ *
+ * @param {string} messageType - Message type from getMessageType()
+ * @returns {boolean}
+ */
+function isSystemMessage(messageType) {
+  var systemTypes = [
+    MESSAGE_TYPES.TEST_CHAT_CONNECTION,
+    MESSAGE_TYPES.SHEETS_CHAT_TEST,
+    MESSAGE_TYPES.CONFIRMED,
+    MESSAGE_TYPES.QUEUE_STARTED,
+    MESSAGE_TYPES.QUEUE_COMPLETE
+  ];
+  return systemTypes.indexOf(messageType) !== -1;
+}
+
+// ============================================================================
 // TEST MESSAGE HANDLING
 // ============================================================================
 
@@ -260,19 +334,29 @@ function validateLabels(labels) {
  */
 function isTestChatLabels(labels) {
   if (!labels) return false;
-  return labels.trim().toUpperCase().startsWith('TEST_CHAT_CONNECTION');
+  var upper = labels.trim().toUpperCase();
+  return upper.startsWith('TEST_CHAT_CONNECTION') || upper.startsWith('SHEETS_CHAT_TEST');
 }
 
 /**
  * Handles a test chat message routed through Chat.
+ * Supports both legacy TEST_CHAT_CONNECTION and new SHEETS_CHAT_TEST.
  *
  * @param {Object} parsed - Parsed message (instanceName, labels, emailId)
+ * @param {string} messageName - Chat message name for cleanup
  * @returns {Object} Result
  */
-function handleTestChatMessage(parsed) {
-  const testId = parsed.emailId || '';
+function handleTestChatMessage(parsed, messageName) {
+  var testId = parsed.emailId || '';
+  var msgType = getMessageType(parsed.labels);
 
-  const payload = {
+  // New Sheets Chat Test: Hub sends webhook, user replies CONFIRMED, hub deletes
+  if (msgType === MESSAGE_TYPES.SHEETS_CHAT_TEST) {
+    return handleSheetsChatTest(parsed, messageName);
+  }
+
+  // Legacy test: just send success webhook back
+  var payload = {
     action: 'test_chat_success',
     instanceName: parsed.instanceName,
     testId: testId,
@@ -281,13 +365,113 @@ function handleTestChatMessage(parsed) {
     timestamp: new Date().toISOString()
   };
 
-  const result = sendWebhookToUser(parsed.instanceName, payload);
+  var result = sendWebhookToUser(parsed.instanceName, payload);
 
   if (result.success) {
-    logHub('TEST_CHAT_SUCCESS', `${parsed.instanceName} (${testId || 'no-id'})`);
+    logHub('TEST_CHAT_SUCCESS', parsed.instanceName + ' (' + (testId || 'no-id') + ')');
     return { success: true };
   }
 
-  logHub('TEST_CHAT_FAILED', `${parsed.instanceName}: ${result.error}`);
+  logHub('TEST_CHAT_FAILED', parsed.instanceName + ': ' + result.error);
   return { success: false, error: result.error };
+}
+
+/**
+ * Handles the SHEETS_CHAT_TEST flow:
+ * 1. User sent chat with SHEETS_CHAT_TEST
+ * 2. Hub tracks the message, sends webhook to user with test_sheets_chat_confirm
+ * 3. User will send CONFIRMED chat (handled by handleConfirmedMessage)
+ * 4. Hub deletes both messages
+ *
+ * @param {Object} parsed - Parsed message
+ * @param {string} messageName - Chat message name for cleanup
+ * @returns {Object} Result
+ */
+function handleSheetsChatTest(parsed, messageName) {
+  var conversationId = parsed.emailId || Utilities.getUuid();
+
+  // Track this message for later cleanup using pending request system
+  createPendingRequest(parsed.instanceName, conversationId, {
+    type: 'sheets_chat_test',
+    messageNames: messageName ? [messageName] : [],
+    startedAt: new Date().toISOString()
+  });
+
+  // Send webhook to user telling them to reply CONFIRMED
+  var payload = {
+    action: 'test_sheets_chat_confirm',
+    instanceName: parsed.instanceName,
+    conversationId: conversationId,
+    message: 'Hub received your test. Sending CONFIRMED reply.',
+    origin: 'hub',
+    timestamp: new Date().toISOString()
+  };
+
+  var result = sendWebhookToUser(parsed.instanceName, payload);
+
+  if (result.success) {
+    logHub('SHEETS_CHAT_TEST_RECEIVED', parsed.instanceName + ' [' + conversationId + '] - webhook sent to user');
+    return { success: true, conversationId: conversationId };
+  }
+
+  logHub('SHEETS_CHAT_TEST_FAILED', parsed.instanceName + ': ' + result.error);
+  return { success: false, error: result.error };
+}
+
+/**
+ * Handles a CONFIRMED message in chat.
+ * Finds the matching pending request, deletes all tracked messages, cleans up.
+ *
+ * @param {Object} parsed - Parsed message (instanceName, emailId=conversationId)
+ * @param {string} messageName - This CONFIRMED message's name
+ * @returns {Object} Result
+ */
+function handleConfirmedMessage(parsed, messageName) {
+  var conversationId = parsed.emailId || '';
+  var instanceName = parsed.instanceName;
+
+  if (!conversationId || !instanceName) {
+    logHub('CONFIRMED_ERROR', 'Missing conversationId or instanceName');
+    return { success: false, error: 'Missing conversationId or instanceName' };
+  }
+
+  // Find the pending request for this conversation
+  var pending = getPendingRequestByEmailId(instanceName, conversationId);
+
+  if (!pending) {
+    logHub('CONFIRMED_NO_PENDING', instanceName + ' [' + conversationId + ']');
+    return { success: true, message: 'No pending request found (may already be cleaned up)' };
+  }
+
+  // Collect all message names: original test message + this CONFIRMED message
+  var allMessages = (pending.messageNames || []).slice();
+  if (messageName) {
+    allMessages.push(messageName);
+  }
+
+  // Delete all tracked chat messages
+  if (allMessages.length > 0) {
+    var deleteResult = deleteChatMessages(allMessages);
+    logHub('CONFIRMED_CLEANUP', instanceName + ' [' + conversationId + ']: deleted ' + deleteResult.deleted + ' messages');
+  }
+
+  // Remove pending request
+  removePendingRequest(instanceName, conversationId);
+
+  // Send success webhook to user
+  var payload = {
+    action: 'test_sheets_chat_complete',
+    instanceName: instanceName,
+    conversationId: conversationId,
+    messagesDeleted: allMessages.length,
+    message: 'Test complete. Chat messages deleted.',
+    origin: 'hub',
+    timestamp: new Date().toISOString()
+  };
+
+  sendWebhookToUser(instanceName, payload);
+
+  logHub('SHEETS_CHAT_TEST_COMPLETE', instanceName + ' [' + conversationId + '] - ' + allMessages.length + ' messages deleted');
+
+  return { success: true, deleted: allMessages.length };
 }

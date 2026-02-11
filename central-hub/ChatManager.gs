@@ -78,9 +78,10 @@ function sendEmailToChat(emailData) {
  */
 function formatEmailForAI(emailData) {
   const parts = [];
+  const emailId = emailData.emailId || '';
 
-  // Header with instance identifier
-  parts.push(`📧 @${emailData.instanceName} needs categorization:`);
+  // Header using consistent message format
+  parts.push(`@${emailData.instanceName}:[${emailId}] EMAIL_READY`);
   parts.push('');
 
   // Available labels
@@ -102,10 +103,10 @@ function formatEmailForAI(emailData) {
     parts.push('');
   }
 
-  // Instructions
+  // Instructions using consistent format
   parts.push('INSTRUCTIONS:');
-  parts.push(`Reply with: @${emailData.instanceName}: Label1, Label2`);
-  parts.push('Reply "NONE" if no labels apply.');
+  parts.push(`Reply with: @${emailData.instanceName}:[${emailId}] Label1, Label2`);
+  parts.push(`Reply with: @${emailData.instanceName}:[${emailId}] NONE if no labels apply.`);
 
   return parts.join('\n');
 }
@@ -189,7 +190,7 @@ function sendStatusToChat(messageText) {
  * @param {string} labels - Labels that were applied
  * @returns {Object} Result with messageName
  */
-function sendCompletionToChat(instanceName, labels) {
+function sendCompletionToChat(instanceName, labels, emailId) {
   const spaceId = getHubConfig('chat_space_id');
 
   if (!spaceId) {
@@ -197,8 +198,9 @@ function sendCompletionToChat(instanceName, labels) {
   }
 
   try {
+    const convId = emailId || 'completion';
     const message = Chat.Spaces.Messages.create(
-      { text: `✓ ${instanceName}: Applied "${labels}"` },
+      { text: `@${instanceName}:[${convId}] COMPLETE - Applied "${labels}"` },
       spaceId
     );
 

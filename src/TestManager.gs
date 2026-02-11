@@ -150,6 +150,127 @@ function handleTestChatSuccess(data) {
 }
 
 // ============================================================================
+// SHEETS CHAT TEST (User → Chat → Hub → Webhook → User → Chat → Hub deletes)
+// ============================================================================
+
+/**
+ * Tests the full Sheets-Chat-Webhook round-trip:
+ * 1. User sends chat: @instanceName:[testId] SHEETS_CHAT_TEST
+ * 2. Hub sees chat, sends webhook to User with test_sheets_chat_confirm
+ * 3. User receives webhook, sends chat: @instanceName:[testId] CONFIRMED
+ * 4. Hub sees CONFIRMED, deletes both chat messages, sends completion webhook
+ */
+function testSheetsChatFromUser() {
+  var ui = SpreadsheetApp.getUi();
+  var webhookUrl = getConfigValue('chat_webhook_url');
+
+  if (!webhookUrl) {
+    ui.alert('Not Configured', 'Chat webhook URL not set. Configure chat_webhook_url first.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var instanceName = getInstanceName();
+  var testId = Utilities.getUuid();
+
+  // Send test message using consistent format
+  var message = buildChatMessage(instanceName, testId, 'SHEETS_CHAT_TEST');
+  postToChat(webhookUrl, message);
+
+  // Store the testId so the webhook handler can use it
+  setConfigValue('pending_sheets_chat_test_id', testId);
+
+  logAction('SYSTEM', 'SHEETS_CHAT_TEST_SENT', 'Sent SHEETS_CHAT_TEST [' + testId + ']');
+
+  ui.alert('Test Sent',
+    'Sheets Chat test message sent.\n\n' +
+    'Flow:\n' +
+    '1. Chat message sent to space\n' +
+    '2. Hub will detect it and send webhook back here\n' +
+    '3. This sheet will auto-reply CONFIRMED in chat\n' +
+    '4. Hub will delete both messages\n\n' +
+    'Check Log sheet for progress.',
+    ui.ButtonSet.OK);
+}
+
+/**
+ * Handles Hub-initiated Sheets Chat test.
+ * Hub sends webhook telling User to start by posting SHEETS_CHAT_TEST to chat.
+ *
+ * @param {Object} data - Webhook payload with conversationId
+ * @returns {TextOutput} JSON response
+ */
+function handleTestSheetsChatStart(data) {
+  var webhookUrl = getConfigValue('chat_webhook_url');
+  var instanceName = getInstanceName();
+  var conversationId = data.conversationId || Utilities.getUuid();
+
+  logAction('SYSTEM', 'SHEETS_CHAT_TEST_START', 'Hub initiated test [' + conversationId + ']');
+
+  if (!webhookUrl) {
+    logAction('SYSTEM', 'SHEETS_CHAT_TEST_START_FAILED', 'chat_webhook_url not configured');
+    return jsonResponse({ success: false, error: 'Chat webhook URL not configured' });
+  }
+
+  // Send SHEETS_CHAT_TEST message to chat using consistent format
+  var message = buildChatMessage(instanceName, conversationId, 'SHEETS_CHAT_TEST');
+  postToChat(webhookUrl, message);
+
+  // Store the conversation ID for tracking
+  setConfigValue('pending_sheets_chat_test_id', conversationId);
+
+  logAction('SYSTEM', 'SHEETS_CHAT_TEST_SENT', 'Sent SHEETS_CHAT_TEST [' + conversationId + ']');
+
+  return jsonResponse({ success: true, status: 'test_chat_sent', conversationId: conversationId });
+}
+
+/**
+ * Handles Hub webhook asking User to confirm the Sheets Chat test.
+ * Sends CONFIRMED message back to chat using consistent format.
+ *
+ * @param {Object} data - Webhook payload with conversationId
+ * @returns {TextOutput} JSON response
+ */
+function handleTestSheetsChatConfirm(data) {
+  var webhookUrl = getConfigValue('chat_webhook_url');
+  var instanceName = getInstanceName();
+  var conversationId = data.conversationId || '';
+
+  logAction('SYSTEM', 'SHEETS_CHAT_CONFIRM_RECEIVED', 'Hub asked for confirmation [' + conversationId + ']');
+
+  if (!webhookUrl) {
+    logAction('SYSTEM', 'SHEETS_CHAT_CONFIRM_FAILED', 'chat_webhook_url not configured');
+    return jsonResponse({ success: false, error: 'Chat webhook URL not configured' });
+  }
+
+  // Send CONFIRMED reply using consistent format
+  var message = buildChatMessage(instanceName, conversationId, 'CONFIRMED');
+  postToChat(webhookUrl, message);
+
+  logAction('SYSTEM', 'SHEETS_CHAT_CONFIRMED_SENT', 'Sent CONFIRMED [' + conversationId + ']');
+
+  return jsonResponse({ success: true, status: 'confirmed_sent', conversationId: conversationId });
+}
+
+/**
+ * Handles the final completion webhook from Hub after messages are deleted.
+ *
+ * @param {Object} data - Webhook payload
+ * @returns {TextOutput} JSON response
+ */
+function handleTestSheetsChatComplete(data) {
+  var conversationId = data.conversationId || '';
+  var deleted = data.messagesDeleted || 0;
+
+  logAction('SYSTEM', 'SHEETS_CHAT_TEST_COMPLETE',
+    'Test complete [' + conversationId + ']. ' + deleted + ' chat messages deleted by Hub.');
+
+  // Clean up stored test ID
+  deleteConfigValue('pending_sheets_chat_test_id');
+
+  return jsonResponse({ success: true, status: 'complete' });
+}
+
+// ============================================================================
 // HELPERS
 // ============================================================================
 
@@ -184,11 +305,12 @@ function sendWebhookToHub(hubUrl, payload) {
 
 /**
  * Builds a chat test message that the Hub can recognize.
+ * Uses the consistent message format.
  *
  * @param {string} instanceName - User instance name
  * @param {string} testId - Test identifier
  * @returns {string} Formatted test message
  */
 function buildTestChatMessage(instanceName, testId) {
-  return `@${instanceName}: [${testId}] TEST_CHAT_CONNECTION`;
+  return buildChatMessage(instanceName, testId, 'TEST_CHAT_CONNECTION');
 }
