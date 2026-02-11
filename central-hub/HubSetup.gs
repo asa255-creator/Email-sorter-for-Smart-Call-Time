@@ -24,6 +24,9 @@ function onOpen() {
     .addItem('View Pending Requests', 'showPendingRequests')
     .addItem('Cleanup Old Requests', 'cleanupPendingRequests')
     .addSeparator()
+    .addItem('Delete Pending Chat Messages', 'deletePendingChatMessages')
+    .addItem('Clear All Chat Messages', 'clearAllChatMessages')
+    .addSeparator()
     .addItem('Test Webhook Ping (Hub → User → Hub)', 'testWebhookPingFromHub')
     .addItem('Test Chat Connection (Hub → User → Chat → Hub)', 'testChatConnectionFromHub')
     .addItem('Test Sheets Chat Round-Trip (Full test with message cleanup)', 'testSheetsChatFromHub')
@@ -179,6 +182,119 @@ function showPendingRequests() {
     ui.alert('No Pending', 'No pending requests. All have been processed.', ui.ButtonSet.OK);
   } else {
     ui.alert('Pending Requests', `${pending} pending request(s):\n\n${message}`, ui.ButtonSet.OK);
+  }
+}
+
+// ============================================================================
+// MESSAGE MANAGEMENT
+// ============================================================================
+
+/**
+ * Deletes all chat messages tracked in pending requests, then clears pending entries.
+ * Use this to clean up stuck pending messages (e.g. after failed registrations or tests).
+ */
+function deletePendingChatMessages() {
+  var ui = SpreadsheetApp.getUi();
+  var sheet = getOrCreatePendingSheet();
+  var lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) {
+    ui.alert('No Pending', 'No pending requests to clean up.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var result = ui.alert(
+    'Delete Pending Chat Messages',
+    'This will delete all chat messages tracked in pending requests and clear the pending list.\n\nContinue?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (result !== ui.Button.YES) return;
+
+  var data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  var totalDeleted = 0;
+  var totalPending = 0;
+
+  for (var i = 0; i < data.length; i++) {
+    var metadata = {};
+    try { metadata = JSON.parse(data[i][5] || '{}'); } catch (e) {}
+
+    if (metadata.messageNames && metadata.messageNames.length > 0) {
+      var deleteResult = deleteChatMessages(metadata.messageNames);
+      totalDeleted += deleteResult.deleted;
+    }
+    totalPending++;
+  }
+
+  // Clear all pending rows
+  if (lastRow > 1) {
+    sheet.deleteRows(2, lastRow - 1);
+  }
+
+  logHub('PENDING_MESSAGES_CLEARED', 'Deleted ' + totalDeleted + ' chat messages from ' + totalPending + ' pending requests');
+  ui.alert('Done', 'Deleted ' + totalDeleted + ' chat messages and cleared ' + totalPending + ' pending requests.', ui.ButtonSet.OK);
+}
+
+/**
+ * Clears ALL messages from the Chat space.
+ * Lists recent messages via Chat API and deletes them.
+ * Use this as a nuclear option to clean up the chat space.
+ */
+function clearAllChatMessages() {
+  var ui = SpreadsheetApp.getUi();
+  var spaceId = getHubConfig('chat_space_id');
+
+  if (!spaceId) {
+    ui.alert('Error', 'Chat space ID not configured. Run Hub Admin > Configure Chat Space first.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var result = ui.alert(
+    'Clear ALL Chat Messages',
+    'This will delete ALL messages posted by the Hub in the Chat space.\n\nThis cannot be undone. Continue?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (result !== ui.Button.YES) return;
+
+  var totalDeleted = 0;
+  var pageToken = null;
+
+  try {
+    // List and delete messages in batches
+    do {
+      var params = { pageSize: 100 };
+      if (pageToken) params.pageToken = pageToken;
+
+      var response = Chat.Spaces.Messages.list(spaceId, params);
+      var messages = response.messages || [];
+
+      for (var i = 0; i < messages.length; i++) {
+        try {
+          Chat.Spaces.Messages.remove(messages[i].name);
+          totalDeleted++;
+        } catch (delErr) {
+          // Skip messages we can't delete (e.g. from other senders)
+          logHub('CLEAR_SKIP', messages[i].name + ': ' + delErr.message);
+        }
+      }
+
+      pageToken = response.nextPageToken;
+    } while (pageToken);
+
+    // Also clear the pending sheet since those messages are now gone
+    var pendingSheet = getOrCreatePendingSheet();
+    var pendingLastRow = pendingSheet.getLastRow();
+    if (pendingLastRow > 1) {
+      pendingSheet.deleteRows(2, pendingLastRow - 1);
+    }
+
+    logHub('ALL_MESSAGES_CLEARED', 'Deleted ' + totalDeleted + ' messages from chat space');
+    ui.alert('Done', 'Deleted ' + totalDeleted + ' messages from the chat space and cleared pending requests.', ui.ButtonSet.OK);
+
+  } catch (error) {
+    logHub('CLEAR_ERROR', error.message);
+    ui.alert('Error', 'Failed to clear messages: ' + error.message, ui.ButtonSet.OK);
   }
 }
 
