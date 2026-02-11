@@ -454,6 +454,11 @@ cd Email-sorter-for-Smart-Call-Time
 ./setup.sh
 ```
 
+One-line full re-download:
+```bash
+cd .. && rm -rf Email-sorter-for-Smart-Call-Time && git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git && cd Email-sorter-for-Smart-Call-Time && ./setup.sh
+```
+
 ---
 
 ## Code Architecture
