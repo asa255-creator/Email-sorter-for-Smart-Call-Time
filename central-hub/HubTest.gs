@@ -162,6 +162,63 @@ function testListMessages(limit) {
 }
 
 /**
+ * Menu action: View recent messages in the Chat space.
+ * Shows the last 10 messages in a dialog so you can verify what the Hub sees.
+ */
+function viewRecentChatMessagesFromHub() {
+  var ui = SpreadsheetApp.getUi();
+  var spaceId = getHubConfig('chat_space_id');
+
+  if (!spaceId) {
+    ui.alert('Not Configured', 'Chat space ID not configured. Run Hub Admin > Configure Chat Space first.', ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
+    var response = Chat.Spaces.Messages.list(spaceId, {
+      pageSize: 10
+    });
+
+    var messages = response.messages || [];
+
+    if (messages.length === 0) {
+      ui.alert('No Messages', 'No messages found in the Chat space.\n\nSpace: ' + spaceId, ui.ButtonSet.OK);
+      return;
+    }
+
+    var lines = messages.map(function(msg, i) {
+      var time = msg.createTime || '(no time)';
+      var sender = '(unknown)';
+      if (msg.sender && msg.sender.displayName) {
+        sender = msg.sender.displayName;
+      } else if (msg.sender && msg.sender.name) {
+        sender = msg.sender.name;
+      }
+      var text = msg.text || msg.formattedText || '(no text)';
+      if (text.length > 200) {
+        text = text.substring(0, 200) + '...';
+      }
+      return (i + 1) + '. [' + time + '] ' + sender + ':\n   ' + text;
+    });
+
+    ui.alert('Recent Chat Messages (' + messages.length + ' found)',
+      'Space: ' + spaceId + '\n\n' + lines.join('\n\n'),
+      ui.ButtonSet.OK);
+
+  } catch (e) {
+    ui.alert('Error',
+      'Could not fetch messages from Chat space.\n\n' +
+      'Error: ' + e.message + '\n\n' +
+      'Space ID: ' + spaceId + '\n\n' +
+      'Check that:\n' +
+      '1. The Chat space ID is correct\n' +
+      '2. The Hub app has access to the space\n' +
+      '3. The Chat API is enabled in Cloud Console',
+      ui.ButtonSet.OK);
+  }
+}
+
+/**
  * Deletes ALL messages in the Chat space (cleanup utility).
  * USE WITH CAUTION - this clears the entire conversation.
  *
