@@ -742,12 +742,17 @@ register_with_hub() {
     echo "  Hub URL: $hub_url"
     echo ""
 
-    # Get user email from clasp login
-    local user_email=$(clasp login --status 2>/dev/null | grep -o '[^ ]*@[^ ]*' | head -1)
+    # Get user email from clasp login (output may go to stdout or stderr)
+    local clasp_status=$(clasp login --status 2>&1)
+    local user_email=$(echo "$clasp_status" | grep -o '[a-zA-Z0-9._%+-]*@[a-zA-Z0-9.-]*\.[a-zA-Z]*' | head -1)
 
     if [ -z "$user_email" ]; then
-        print_warning "Could not determine email, using placeholder"
-        user_email="unknown@user"
+        print_warning "Could not determine email from clasp login"
+        read -p "Enter your Google account email: " user_email
+        if [ -z "$user_email" ]; then
+            print_error "Email required for registration"
+            return 1
+        fi
     fi
 
     # Generate instance name from email
@@ -781,7 +786,16 @@ register_with_hub() {
         return 0
     else
         print_error "Hub registration failed"
-        echo "Response: $response"
+        # Show clean error instead of raw HTML
+        if echo "$response" | grep -q 'Page Not Found\|<!DOCTYPE'; then
+            echo "  The Hub URL returned a 'Page Not Found' error."
+            echo "  Make sure you've completed Hub setup:"
+            echo "    1. Open the Hub spreadsheet and REFRESH the page"
+            echo "    2. Click: Hub Admin > Initial Setup"
+            echo "    3. Verify the web app is deployed as 'Anyone' can access"
+        else
+            echo "  Response: $response"
+        fi
         return 1
     fi
 }
