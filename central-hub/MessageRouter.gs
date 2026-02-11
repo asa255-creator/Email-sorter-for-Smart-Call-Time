@@ -280,7 +280,7 @@ var MESSAGE_TYPES = {
   QUEUE_STARTED: 'QUEUE_STARTED',
   QUEUE_COMPLETE: 'QUEUE_COMPLETE',
 
-  // Registration (via chat - no web app)
+  // Registration (via chat)
   REGISTER: 'REGISTER',
   UNREGISTER: 'UNREGISTER',
   CONFIRM_COMPLETE: 'CONFIRM_COMPLETE',

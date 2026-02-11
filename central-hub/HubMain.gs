@@ -119,7 +119,7 @@ function hubJsonResponse(data) {
 
 /**
  * Handles messages sent to the Chat app.
- * This is the ONLY entry point for all Hub communication.
+ * Called directly by Chat (Apps Script project mode) or via doPost (HTTP endpoint mode).
  *
  * Message types handled:
  * - REGISTER: User instance requesting registration
