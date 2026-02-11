@@ -1,21 +1,19 @@
 /**
  * Inbound Webhook Handler
  *
- * Receives webhook calls from the Central Hub when AI categorizes emails.
- * This keeps the processing logic on the user's sheet, not in the Hub.
+ * Receives webhook calls from the Central Hub.
+ * The Hub sends webhooks TO this instance for:
+ * - Label updates (AI categorized an email)
+ * - Registration confirmations
+ * - Test messages
  *
- * The Hub is a "dumb pipe" - it just routes messages.
- * All business logic for applying labels lives here.
+ * This instance does NOT send HTTP requests to the Hub.
+ * All communication TO the Hub goes through Google Chat messages.
+ * Webhook URLs are stored in the Config sheet (chat_webhook_url, webhook_url).
  */
 
 /**
  * Handles POST requests from the Central Hub.
- * Called when AI provides labels for an email.
- *
- * Expected payload formats:
- * 1. Specific email: { emailId: "...", labels: "Label1, Label2" }
- * 2. Processing row: { labels: "Label1, Label2" }
- * 3. Health check: { action: "ping" }
  *
  * @param {Object} e - Event object with postData
  * @returns {TextOutput} JSON response
@@ -23,11 +21,15 @@
 function doPost(e) {
   try {
     // Parse incoming data
-    const data = JSON.parse(e.postData.contents);
+    var data = JSON.parse(e.postData.contents);
 
     // Handle different request types
     if (data.action === 'ping') {
       return jsonResponse({ success: true, status: 'healthy', timestamp: new Date().toISOString() });
+    }
+
+    if (data.action === 'registration_confirmed') {
+      return handleRegistrationConfirmed(data);
     }
 
     if (data.action === 'test_webhook_ping') {
@@ -70,9 +72,46 @@ function doPost(e) {
     return jsonResponse({ success: false, error: 'Unknown action or missing labels' });
 
   } catch (error) {
-    logAction('WEBHOOK', 'ERROR', `doPost error: ${error.message}`);
+    logAction('WEBHOOK', 'ERROR', 'doPost error: ' + error.message);
     return jsonResponse({ success: false, error: error.message });
   }
+}
+
+/**
+ * Handles registration confirmation from Hub.
+ * Hub sends this after processing our REGISTER chat message.
+ *
+ * @param {Object} data - Confirmation data
+ * @returns {TextOutput} JSON response
+ */
+function handleRegistrationConfirmed(data) {
+  var instanceName = data.instanceName || 'unknown';
+  var email = data.email || '';
+  var conversationId = data.conversationId || 'register';
+
+  logAction('CONFIG', 'REGISTRATION_CONFIRMED',
+    'Hub confirmed registration for ' + instanceName + ' (' + email + ')');
+
+  // Store confirmation status
+  setConfigValue('hub_registered', 'true');
+  setConfigValue('hub_registered_at', new Date().toISOString());
+
+  // Post CONFIRMED back to chat to prove webhook round-trip works
+  // Hub will see this and delete all registration chat messages
+  var chatWebhookUrl = getChatWebhookUrl();
+  if (chatWebhookUrl) {
+    var confirmedMessage = buildChatMessage(instanceName, conversationId, 'CONFIRMED');
+    postToChat(chatWebhookUrl, confirmedMessage);
+    logAction('CONFIG', 'REGISTRATION_CONFIRMED_SENT', 'CONFIRMED posted to chat for ' + instanceName);
+  } else {
+    logAction('CONFIG', 'REGISTRATION_CONFIRM_SKIP', 'No chat_webhook_url - could not post CONFIRMED');
+  }
+
+  return jsonResponse({
+    success: true,
+    status: 'registration_acknowledged',
+    instanceName: instanceName
+  });
 }
 
 /**
@@ -82,39 +121,39 @@ function doPost(e) {
  * @returns {TextOutput} JSON response
  */
 function handleLabelUpdate(data) {
-  const labels = data.labels;
-  const emailId = data.emailId;
+  var labels = data.labels;
+  var emailId = data.emailId;
 
   if (!labels) {
     return jsonResponse({ success: false, error: 'No labels provided' });
   }
 
   try {
-    const ss = SpreadsheetApp.getActive();
-    const sheet = ss.getSheetByName('Queue');
+    var ss = SpreadsheetApp.getActive();
+    var sheet = ss.getSheetByName('Queue');
 
     if (!sheet) {
       return jsonResponse({ success: false, error: 'Queue sheet not found' });
     }
 
-    const lastRow = sheet.getLastRow();
+    var lastRow = sheet.getLastRow();
     if (lastRow <= 1) {
       return jsonResponse({ success: false, error: 'Queue is empty' });
     }
 
     // Get all data
-    const data_range = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+    var data_range = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
 
     // If emailId provided, find that specific row
     if (emailId) {
-      for (let i = 0; i < data_range.length; i++) {
+      for (var i = 0; i < data_range.length; i++) {
         if (data_range[i][0] === emailId) {
-          const rowNum = i + 2;
+          var rowNum = i + 2;
 
           // Update Labels to Apply column (E)
           sheet.getRange(rowNum, 5).setValue(labels);
 
-          logAction('WEBHOOK', 'LABELS_RECEIVED', `Row ${rowNum}: ${labels}`);
+          logAction('WEBHOOK', 'LABELS_RECEIVED', 'Row ' + rowNum + ': ' + labels);
 
           // Trigger processing of this row
           SpreadsheetApp.flush();
@@ -122,28 +161,28 @@ function handleLabelUpdate(data) {
 
           return jsonResponse({
             success: true,
-            message: `Updated row ${rowNum} with labels`,
+            message: 'Updated row ' + rowNum + ' with labels',
             rowNumber: rowNum,
             emailId: emailId,
             labels: labels
           });
         }
       }
-      return jsonResponse({ success: false, error: `Email ID not found: ${emailId}` });
+      return jsonResponse({ success: false, error: 'Email ID not found: ' + emailId });
     }
 
     // No emailId - find first Processing row without labels
-    for (let i = 0; i < data_range.length; i++) {
-      const status = data_range[i][5]; // Column F - Status
-      const existingLabels = data_range[i][4]; // Column E - Labels
+    for (var j = 0; j < data_range.length; j++) {
+      var status = data_range[j][5]; // Column F - Status
+      var existingLabels = data_range[j][4]; // Column E - Labels
 
       if (status === 'Processing' && (!existingLabels || existingLabels.toString().trim() === '')) {
-        const rowNum = i + 2;
+        var rowNum2 = j + 2;
 
         // Update Labels to Apply column (E)
-        sheet.getRange(rowNum, 5).setValue(labels);
+        sheet.getRange(rowNum2, 5).setValue(labels);
 
-        logAction('WEBHOOK', 'LABELS_RECEIVED', `Row ${rowNum} (first Processing): ${labels}`);
+        logAction('WEBHOOK', 'LABELS_RECEIVED', 'Row ' + rowNum2 + ' (first Processing): ' + labels);
 
         // Trigger processing
         SpreadsheetApp.flush();
@@ -151,9 +190,9 @@ function handleLabelUpdate(data) {
 
         return jsonResponse({
           success: true,
-          message: `Updated first Processing row ${rowNum} with labels`,
-          rowNumber: rowNum,
-          emailId: data_range[i][0],
+          message: 'Updated first Processing row ' + rowNum2 + ' with labels',
+          rowNumber: rowNum2,
+          emailId: data_range[j][0],
           labels: labels
         });
       }
@@ -162,7 +201,7 @@ function handleLabelUpdate(data) {
     return jsonResponse({ success: false, error: 'No Processing row found waiting for labels' });
 
   } catch (error) {
-    logAction('WEBHOOK', 'ERROR', `handleLabelUpdate: ${error.message}`);
+    logAction('WEBHOOK', 'ERROR', 'handleLabelUpdate: ' + error.message);
     return jsonResponse({ success: false, error: error.message });
   }
 }
@@ -174,14 +213,14 @@ function handleLabelUpdate(data) {
  * @returns {TextOutput} JSON response
  */
 function doGet(e) {
-  const instanceName = getConfig('instance_name') || 'unknown';
+  var instanceName = getConfig('instance_name') || 'unknown';
 
   return jsonResponse({
     status: 'Email Sorter Webhook Active',
     instance: instanceName,
     timestamp: new Date().toISOString(),
     endpoints: {
-      'POST /': 'Receive labels from Hub',
+      'POST /': 'Receive webhooks from Hub',
       'GET /': 'Status check (this response)'
     }
   });

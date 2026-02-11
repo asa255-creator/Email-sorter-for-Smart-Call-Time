@@ -42,9 +42,14 @@ function createConfigSheet(ss) {
   }
 
   // Default configuration with descriptions
-  const config = [
-    ['chat_webhook_url', 'https://chat.googleapis.com/v1/spaces/AAQAULujEoo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=O3mPCLnQbJzrWcN-qrZGqWBlTiAJbBukWCffMZh1VuQ', 'Webhook URL for outbound notifications to Google Chat. Script posts here to notify Flow.'],
-    ['instance_name', instanceName, 'Auto-generated from your email. Appears in Chat messages so Flow can identify this instance.'],
+  // Webhook URLs stored here are read by all modules:
+  // - chat_webhook_url: For posting messages TO Google Chat (registration, notifications, status)
+  // - webhook_url: This instance's deployed web app URL (Hub sends webhooks here)
+  var config = [
+    ['chat_webhook_url', 'https://chat.googleapis.com/v1/spaces/AAQAULujEoo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=O3mPCLnQbJzrWcN-qrZGqWBlTiAJbBukWCffMZh1VuQ', 'Webhook URL for Google Chat space. Used to post REGISTER, CONFIRM_COMPLETE, and notification messages.'],
+    ['webhook_url', '', 'This instance\'s deployed web app URL. Hub sends webhooks (labels, confirmations) here. Set automatically during deployment.'],
+    ['instance_name', instanceName, 'Auto-generated from your email. Appears in Chat messages so Hub can route to you.'],
+    ['hub_registered', 'false', 'Whether this instance is registered with the Hub. Set to true when Hub confirms.'],
     ['rate_limit_ms', '3000', 'Milliseconds to wait between processing emails in batch mode.'],
     ['batch_size', '50', 'Maximum number of emails to queue at once.'],
     ['last_label_sync', '', 'Timestamp of last Gmail label sync.'],

@@ -2,8 +2,10 @@
  * Smart Call Time - Flow Integrator
  * Main entry points, menu setup, and triggers
  *
- * This is the main orchestration file that sets up menus and triggers.
- * All functionality is delegated to specialized modules.
+ * Communication model:
+ * - User -> Hub: Via Google Chat messages (chat_webhook_url in Config sheet)
+ * - Hub -> User: Via webhooks to our web app URL (webhook_url in Config sheet)
+ * - No direct HTTP to Hub (Hub has no web app)
  *
  * MODULES:
  * - SheetSetup.gs: Sheet creation and initialization
@@ -22,7 +24,7 @@
  * This is a simple trigger that runs automatically.
  */
 function onOpen() {
-  const ui = SpreadsheetApp.getUi();
+  var ui = SpreadsheetApp.getUi();
 
   ui.createMenu('Smart Call Time')
     // Email Sorter submenu
@@ -37,12 +39,12 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(ui.createMenu('Settings')
       .addItem('Show Configuration', 'showConfig')
-      .addItem('Register / Re-register with Hub', 'registerWithHubFromMenu')
+      .addItem('Register with Hub (via Chat)', 'registerWithHubFromMenu')
       .addItem('Refresh All', 'refreshAll'))
     .addSeparator()
     .addSubMenu(ui.createMenu('Testing')
-      .addItem('Test Webhook Ping (User → Hub → User)', 'testWebhookPingFromUser')
-      .addItem('Test Chat Connection (User → Chat → Hub → User)', 'testChatConnectionFromUser')
+      .addItem('Test Webhook Ping (Hub -> User)', 'testWebhookPingFromUser')
+      .addItem('Test Chat Connection (User -> Chat -> Hub -> User)', 'testChatConnectionFromUser')
       .addItem('Test Sheets Chat Round-Trip (Full test with cleanup)', 'testSheetsChatFromUser'))
     .addToUi();
 }
@@ -57,9 +59,9 @@ function onOpen() {
  */
 function setupTriggers() {
   // Remove existing triggers for our functions
-  const triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach(trigger => {
-    const handlerName = trigger.getHandlerFunction();
+  var triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function(trigger) {
+    var handlerName = trigger.getHandlerFunction();
     if (handlerName === 'onEditTrigger' || handlerName === 'checkQueueForProcessing') {
       ScriptApp.deleteTrigger(trigger);
     }
@@ -83,8 +85,8 @@ function setupTriggers() {
  * Creates sheets, syncs labels, sets up triggers, and prompts for instance name.
  */
 function emailSorterSetup() {
-  const ui = SpreadsheetApp.getUi();
-  const ss = SpreadsheetApp.getActive();
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActive();
 
   ui.alert('Setup Starting',
     'Creating sheets and syncing Gmail labels...',
@@ -110,7 +112,7 @@ function emailSorterSetup() {
   promptForHubRegistration(ui);
 
   // Navigate to Instructions
-  const instructionsSheet = ss.getSheetByName('Instructions');
+  var instructionsSheet = ss.getSheetByName('Instructions');
   if (instructionsSheet) {
     ss.setActiveSheet(instructionsSheet);
   }
@@ -129,10 +131,10 @@ function emailSorterSetup() {
  * @param {Ui} ui - The SpreadsheetApp UI object
  */
 function promptForInstanceName(ui) {
-  const currentName = getConfigValue('instance_name');
+  var currentName = getConfigValue('instance_name');
 
   if (!currentName) {
-    const response = ui.prompt('Instance Name',
+    var response = ui.prompt('Instance Name',
       'Enter a unique name for this instance.\n\n' +
       'This name appears in Chat messages and is used by Flow to filter.\n' +
       'Use letters, numbers, and underscores only.\n\n' +
@@ -140,13 +142,13 @@ function promptForInstanceName(ui) {
       ui.ButtonSet.OK_CANCEL);
 
     if (response.getSelectedButton() === ui.Button.OK) {
-      let instanceName = response.getResponseText().trim();
+      var instanceName = response.getResponseText().trim();
       // Replace spaces with underscores, remove special characters
       instanceName = instanceName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
 
       if (instanceName) {
         setConfigValue('instance_name', instanceName);
-        logAction('SYSTEM', 'CONFIG', `Instance name set to: ${instanceName}`);
+        logAction('SYSTEM', 'CONFIG', 'Instance name set to: ' + instanceName);
       }
     }
   }
@@ -156,7 +158,7 @@ function promptForInstanceName(ui) {
  * Refreshes all modules - syncs labels, updates instructions.
  */
 function refreshAll() {
-  const ui = SpreadsheetApp.getUi();
+  var ui = SpreadsheetApp.getUi();
 
   syncLabelsToSheet();
 
@@ -166,15 +168,38 @@ function refreshAll() {
 }
 
 /**
- * Prompts the user to register/re-register with the Hub during setup.
+ * Prompts the user to register with the Hub during setup.
+ * Registration goes through Google Chat - no Hub URL needed.
  * @param {Ui} ui - The SpreadsheetApp UI object
  */
 function promptForHubRegistration(ui) {
-  const currentHubUrl = getHubUrl();
+  var chatWebhookUrl = getChatWebhookUrl();
 
-  const response = ui.alert(
+  if (!chatWebhookUrl) {
+    ui.alert('Chat Webhook Not Set',
+      'To register with the Hub, you need a Chat webhook URL.\n\n' +
+      'Set chat_webhook_url in the Config sheet first.\n' +
+      'You can register later via Settings > Register with Hub.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  var webhookUrl = getWebhookUrl();
+  if (!webhookUrl) {
+    ui.alert('Web App Not Deployed',
+      'Deploy this project as a web app first so the Hub can send webhooks to you.\n' +
+      'Your webhook URL will be set automatically during deployment.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  var response = ui.alert(
     'Hub Registration',
-    'Would you like to register this sheet with the Central Hub now?',
+    'Register this sheet with the Central Hub?\n\n' +
+    'This posts a REGISTER message to the Chat space.\n' +
+    'The Hub will see it, store your webhook URL, and confirm.\n\n' +
+    'Chat webhook: ' + chatWebhookUrl.substring(0, 50) + '...\n' +
+    'Your webhook: ' + webhookUrl.substring(0, 50) + '...',
     ui.ButtonSet.YES_NO
   );
 
@@ -182,14 +207,17 @@ function promptForHubRegistration(ui) {
     return;
   }
 
-  const hubUrl = promptForHubUrl(ui, currentHubUrl);
-  if (!hubUrl) {
-    return;
-  }
-
-  const result = registerWithHub(hubUrl);
+  var result = registerWithHub();
   if (result.success) {
-    ui.alert('Success', 'This sheet is now registered with the Hub.', ui.ButtonSet.OK);
+    ui.alert('Registration Sent',
+      'Registration message posted to Chat.\n\n' +
+      'The Hub will:\n' +
+      '1. See the REGISTER message\n' +
+      '2. Store your webhook URL in the Registry sheet\n' +
+      '3. Send a confirmation webhook to your web app\n' +
+      '4. Delete the registration chat message\n\n' +
+      'Check the Log sheet for confirmation.',
+      ui.ButtonSet.OK);
   } else {
     ui.alert('Registration Failed', result.error || 'Unknown error', ui.ButtonSet.OK);
   }
@@ -197,49 +225,39 @@ function promptForHubRegistration(ui) {
 
 /**
  * Menu action for registering/re-registering with the Hub.
+ * Registration goes through Google Chat - no Hub URL needed.
  */
 function registerWithHubFromMenu() {
-  const ui = SpreadsheetApp.getUi();
-  const currentHubUrl = getHubUrl();
-  const hubUrl = promptForHubUrl(ui, currentHubUrl);
+  var ui = SpreadsheetApp.getUi();
 
-  if (!hubUrl) {
+  var chatWebhookUrl = getChatWebhookUrl();
+  if (!chatWebhookUrl) {
+    ui.alert('Not Configured',
+      'Chat webhook URL not set.\n\n' +
+      'Set chat_webhook_url in the Config sheet first.\n' +
+      '(Unhide the Config sheet: right-click the sheet tab bar)',
+      ui.ButtonSet.OK);
     return;
   }
 
-  const result = registerWithHub(hubUrl);
+  var webhookUrl = getWebhookUrl();
+  if (!webhookUrl) {
+    ui.alert('Not Deployed',
+      'No webhook URL set. Deploy as web app first.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  var result = registerWithHub();
 
   if (result.success) {
-    ui.alert('Success', 'Hub registration completed successfully.', ui.ButtonSet.OK);
+    ui.alert('Registration Sent',
+      'REGISTER message posted to Chat.\n' +
+      'Hub will confirm via webhook. Check Log sheet.',
+      ui.ButtonSet.OK);
   } else {
-    ui.alert('Failed', `Could not register with Hub: ${result.error || 'Unknown error'}`, ui.ButtonSet.OK);
+    ui.alert('Failed', 'Could not register: ' + (result.error || 'Unknown error'), ui.ButtonSet.OK);
   }
-}
-
-/**
- * Prompts for Hub URL and returns it, prefilling with existing value if available.
- * @param {Ui} ui - The SpreadsheetApp UI object
- * @param {string|null} currentHubUrl - Existing Hub URL
- * @returns {string|null} Hub URL or null if cancelled/empty
- */
-function promptForHubUrl(ui, currentHubUrl) {
-  const message = currentHubUrl
-    ? `Current Hub URL:\n${currentHubUrl}\n\nEnter Hub web app URL (or click Cancel):`
-    : 'Enter the Central Hub web app URL:';
-
-  const response = ui.prompt('Hub URL', message, ui.ButtonSet.OK_CANCEL);
-
-  if (response.getSelectedButton() !== ui.Button.OK) {
-    return null;
-  }
-
-  const entered = response.getResponseText().trim();
-  if (!entered) {
-    ui.alert('No URL Entered', 'Hub registration skipped.', ui.ButtonSet.OK);
-    return null;
-  }
-
-  return entered;
 }
 
 // ============================================================================
@@ -259,7 +277,6 @@ function authorize() {
   SpreadsheetApp.getActive();
 
   // External request scope (UrlFetchApp)
-  // Just referencing the service is enough; no actual request needed
   UrlFetchApp.getRequest && UrlFetchApp;
 
   Logger.log('All scopes authorized successfully.');
@@ -274,9 +291,14 @@ function authorize() {
  * Shows the current configuration.
  */
 function showConfig() {
-  const ui = SpreadsheetApp.getUi();
+  var ui = SpreadsheetApp.getUi();
 
-  const config = [
+  var config = [
+    'Instance Name: ' + (getConfigValue('instance_name') || '(not set)'),
+    'Chat Webhook: ' + (getChatWebhookUrl() ? 'Set' : 'NOT SET'),
+    'Webhook URL: ' + (getWebhookUrl() || '(not set)'),
+    'Hub Registered: ' + (getConfigValue('hub_registered') || 'false'),
+    '',
     'Rate Limit: ' + (getConfigValue('rate_limit_ms') || '3000') + 'ms',
     'Batch Size: ' + (getConfigValue('batch_size') || '50'),
     'Last Label Sync: ' + (getConfigValue('last_label_sync') || 'Never'),

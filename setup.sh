@@ -5,14 +5,18 @@
 # ============================================================================
 # Handles both User Instance and Central Hub deployments
 #
+# Architecture:
+#   - Hub: Chat App ONLY (no web app). Receives all input via Google Chat.
+#   - User: Web App (doGet/doPost). Receives webhooks FROM Hub.
+#   - Communication TO Hub: Via Google Chat messages (chat_webhook_url)
+#   - Communication TO User: Via webhooks (webhook_url in Hub's Registry sheet)
+#
 # Usage:
 #   ./setup.sh           # Interactive menu
 #   ./setup.sh --clean   # Remove local config and start fresh
 # ============================================================================
 
 set -e
-
-# Python is no longer required - deployment parsing uses plain-text grep/awk.
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,9 +29,6 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
-
-# Default Hub URL (can be overridden during setup)
-DEFAULT_HUB_URL=""  # Must be set to your Hub's web app URL (https://script.google.com/macros/s/.../exec)
 
 # Fix Node.js v25 memory issues
 export NODE_OPTIONS="--max-old-space-size=8192"
@@ -59,8 +60,6 @@ CONFIG_FILES=(
     "src/.clasp.json"
     "central-hub/.clasp.json"
     "src/.webapp_url"
-    "central-hub/.webapp_url"
-    "central-hub/.hub_url"
 )
 
 # Backup config files to /tmp before reset
@@ -205,7 +204,7 @@ select_project_type() {
     echo -e "${YELLOW}What are you setting up?${NC}"
     echo ""
     echo "  1) User Instance  - Individual email sorter sheet"
-    echo "  2) Central Hub    - Shared hub for routing (admin only)"
+    echo "  2) Central Hub    - Chat App for routing (admin only, NO web app)"
     echo ""
     read -p "Enter choice (1 or 2): " TYPE_CHOICE
 
@@ -231,10 +230,17 @@ select_project_type() {
 select_action() {
     echo -e "${YELLOW}What would you like to do?${NC}"
     echo ""
-    echo "  1) Create NEW project (Google Sheet + Apps Script)"
-    echo "  2) Update EXISTING project"
-    echo "  3) Switch Google account"
-    echo "  4) Exit"
+    if [ "$PROJECT_TYPE" = "hub" ]; then
+        echo "  1) Create NEW project (Google Sheet + Apps Script)"
+        echo "  2) Update EXISTING project (push code only)"
+        echo "  3) Switch Google account"
+        echo "  4) Exit"
+    else
+        echo "  1) Create NEW project (Google Sheet + Apps Script)"
+        echo "  2) Update EXISTING project"
+        echo "  3) Switch Google account"
+        echo "  4) Exit"
+    fi
     echo ""
     read -p "Enter choice (1-4): " ACTION_CHOICE
     echo ""
@@ -272,8 +278,20 @@ create_new_project() {
     # Push code
     push_code
 
-    # Deploy as web app
-    deploy_webapp
+    if [ "$PROJECT_TYPE" = "hub" ]; then
+        # Hub: NO web app deployment. It's a Chat App only.
+        echo ""
+        echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+        echo -e "${GREEN}  HUB PROJECT CREATED (Chat App Only - No Web App)${NC}"
+        echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo "  The Hub does NOT need a web app deployment."
+        echo "  It receives ALL input through Google Chat (onMessage)."
+        echo ""
+    else
+        # User: Deploy as web app (Hub sends webhooks here)
+        deploy_webapp
+    fi
 
     # Pre-authorize the script
     echo ""
@@ -282,11 +300,6 @@ create_new_project() {
         pre_authorize
     else
         print_info "Skipped - you'll be prompted to authorize when you first use the Sheet"
-    fi
-
-    # Register with Hub (User instances only)
-    if [ "$PROJECT_TYPE" = "user" ]; then
-        prompt_hub_registration
     fi
 
     # Show completion
@@ -332,25 +345,16 @@ update_existing_project() {
     # Push code
     push_code
 
-    # Ask about deployment
-    echo ""
-    read -p "Deploy/update web app? (y/n): " DEPLOY_CHOICE
-    if [ "$DEPLOY_CHOICE" = "y" ] || [ "$DEPLOY_CHOICE" = "Y" ]; then
-        deploy_webapp
-
-        # Register/update with Hub (User instances only)
-        if [ "$PROJECT_TYPE" = "user" ]; then
-            prompt_hub_registration
+    # For User instances, ask about web app deployment
+    if [ "$PROJECT_TYPE" = "user" ]; then
+        echo ""
+        read -p "Deploy/update web app? (y/n): " DEPLOY_CHOICE
+        if [ "$DEPLOY_CHOICE" = "y" ] || [ "$DEPLOY_CHOICE" = "Y" ]; then
+            deploy_webapp
         fi
     else
-        # Even without deploy, check if Hub registration needed (User only)
-        if [ "$PROJECT_TYPE" = "user" ]; then
-            echo ""
-            read -p "Check Hub registration status? (y/n): " CHECK_HUB
-            if [ "$CHECK_HUB" = "y" ] || [ "$CHECK_HUB" = "Y" ]; then
-                prompt_hub_registration
-            fi
-        fi
+        echo ""
+        print_info "Hub is a Chat App only - no web app deployment needed."
     fi
 
     show_completion
@@ -415,7 +419,7 @@ push_code() {
 }
 
 # ============================================================================
-# DEPLOY WEB APP
+# DEPLOY WEB APP (User Instances Only)
 # ============================================================================
 
 # Parse deployment IDs from plain-text `clasp deployments` output.
@@ -501,7 +505,7 @@ remove_extra_webapp_deployments() {
 }
 
 deploy_webapp() {
-    print_info "Deploying as web app..."
+    print_info "Deploying User instance as web app..."
 
     cd "$SRC_DIR"
 
@@ -555,91 +559,34 @@ deploy_webapp() {
     if [ -n "$DEPLOY_ID" ]; then
         WEBAPP_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
 
-        # Save URL so prompt_hub_registration can find it without re-querying clasp
+        # Save URL so scripts can find it
         echo "$WEBAPP_URL" > "$SRC_DIR/.webapp_url"
 
         echo ""
         echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-        echo -e "${GREEN}  WEB APP DEPLOYED${NC}"
+        echo -e "${GREEN}  USER WEB APP DEPLOYED${NC}"
         echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
         echo ""
-
-        if [ "$PROJECT_TYPE" = "hub" ]; then
-            echo -e "Hub URL (share with users):"
-            echo -e "${YELLOW}$WEBAPP_URL${NC}"
-            echo "$WEBAPP_URL" > "$SRC_DIR/.hub_url"
-            print_info "URL saved to central-hub/.hub_url"
-
-            # Commit and push the Hub URL so user instances auto-detect it
-            commit_hub_url "$WEBAPP_URL"
-        else
-            echo -e "Webhook URL (for Hub registration):"
-            echo -e "${YELLOW}$WEBAPP_URL${NC}"
-        fi
+        echo -e "Webhook URL (Hub will send webhooks here):"
+        echo -e "${YELLOW}$WEBAPP_URL${NC}"
+        echo ""
+        echo "This URL will be sent to the Hub during registration."
+        echo "Registration happens via Google Chat (not HTTP to Hub)."
         echo ""
     else
         print_warning "Could not determine deployment URL"
         echo "Run 'clasp deployments' in $SRC_DIR to see deployments"
-        echo "Make sure you have an Apps Script web app deployment (not just a library)."
     fi
-}
-
-# ============================================================================
-# COMMIT HUB URL TO REPO
-# ============================================================================
-
-# After Hub deployment, commit and push .hub_url so user instances auto-detect it
-commit_hub_url() {
-    local webapp_url="$1"
-
-    cd "$SCRIPT_DIR"
-
-    if [ ! -d ".git" ]; then
-        print_warning "Not a git repo - Hub URL saved locally only"
-        return
-    fi
-
-    echo ""
-    print_info "Saving Hub URL to repository..."
-
-    # Stage and commit the .hub_url file
-    if git add central-hub/.hub_url 2>/dev/null; then
-        if git diff --cached --quiet 2>/dev/null; then
-            print_info "Hub URL unchanged - no commit needed"
-        else
-            git commit -m "Update Hub web app URL for user instances" -- central-hub/.hub_url 2>/dev/null
-            print_success "Hub URL committed to repo"
-
-            # Push so user instances get it on next pull/setup
-            local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-            if GIT_TERMINAL_PROMPT=0 git push origin "$current_branch" 2>/dev/null; then
-                print_success "Hub URL pushed - user instances will auto-detect it"
-            else
-                print_warning "Could not push Hub URL automatically."
-                print_info "Run manually: git push origin $current_branch"
-            fi
-        fi
-    else
-        print_warning "Could not stage Hub URL file"
-    fi
-
-    cd "$SRC_DIR"
 }
 
 # ============================================================================
 # PRE-AUTHORIZE SCRIPT
 # ============================================================================
 
-# Attempt to pre-authorize the Apps Script so the user doesn't face a consent
-# popup later when opening the Sheet.
 pre_authorize() {
     print_info "Attempting to pre-authorize script..."
 
     cd "$SRC_DIR"
-
-    # clasp run requires the Apps Script API to be enabled on the GCP project.
-    # Try running a lightweight function - if it works, authorization is handled.
-    # If it fails, fall back to opening the script in the browser.
 
     local run_output
     run_output=$(clasp run authorize 2>&1)
@@ -650,7 +597,7 @@ pre_authorize() {
         return 0
     fi
 
-    # clasp run failed - check why
+    # clasp run failed - open browser for manual authorization
     if echo "$run_output" | grep -qi "not enabled\|API has not been used\|Apps Script API"; then
         print_info "Apps Script API not enabled - opening browser for authorization"
     elif echo "$run_output" | grep -qi "authorization\|consent\|PERMISSION_DENIED"; then
@@ -696,199 +643,6 @@ pre_authorize() {
 }
 
 # ============================================================================
-# HUB REGISTRATION (User Instances Only)
-# ============================================================================
-
-# Get the current webapp URL - checks saved file first, then queries clasp
-get_webapp_url() {
-    # First check if deploy_webapp saved the URL already
-    if [ -f "$SRC_DIR/.webapp_url" ]; then
-        cat "$SRC_DIR/.webapp_url"
-        return
-    fi
-
-    # Fallback: query clasp deployments
-    cd "$SRC_DIR"
-    local deploy_id
-    deploy_id=$(get_webapp_deployment_id)
-
-    if [ -n "$deploy_id" ]; then
-        echo "https://script.google.com/macros/s/$deploy_id/exec"
-    else
-        # Last resort: try plain text parsing of clasp deployments
-        local deploy_output
-        deploy_output=$(clasp deployments 2>/dev/null || echo "")
-        deploy_id=$(echo "$deploy_output" | grep -o 'AKfycb[a-zA-Z0-9_-]*' | head -1)
-        if [ -n "$deploy_id" ]; then
-            echo "https://script.google.com/macros/s/$deploy_id/exec"
-        else
-            echo ""
-        fi
-    fi
-}
-
-# Register or update registration with Hub
-register_with_hub() {
-    local webapp_url="$1"
-    local hub_url="$2"
-
-    if [ -z "$webapp_url" ]; then
-        print_error "No webapp URL available"
-        return 1
-    fi
-
-    print_info "Registering with Hub..."
-    echo "  Webhook URL: $webapp_url"
-    echo "  Hub URL: $hub_url"
-    echo ""
-
-    # Get user email from clasp login
-    local user_email=$(clasp login --status 2>/dev/null | grep -o '[^ ]*@[^ ]*' | head -1)
-
-    if [ -z "$user_email" ]; then
-        print_warning "Could not determine email, using placeholder"
-        user_email="unknown@user"
-    fi
-
-    # Generate instance name from email
-    local instance_name=$(echo "$user_email" | cut -d'@' -f1 | tr -cd 'a-zA-Z0-9_')
-
-    # Make registration request
-    local response=$(curl -s -L -X POST "$hub_url" \
-        -H "Content-Type: application/json" \
-        -H "Accept: application/json" \
-        -d "{
-            \"action\": \"register\",
-            \"email\": \"$user_email\",
-            \"instanceName\": \"$instance_name\",
-            \"webhookUrl\": \"$webapp_url\"
-        }" 2>/dev/null)
-
-    # Check response
-    if echo "$response" | grep -q '"success":true'; then
-        print_success "Registered with Hub successfully"
-
-        # Check if response mentions update vs new registration
-        if echo "$response" | grep -q '"message":"Registration updated"'; then
-            print_info "Updated existing registration"
-        else
-            print_info "New registration created"
-        fi
-
-        # Note: Registration data is stored on Hub's Google Sheet
-        # No local file needed
-
-        return 0
-    else
-        print_error "Hub registration failed"
-        echo "Response: $response"
-        return 1
-    fi
-}
-
-# Validate that a URL is a web app URL, not a library URL
-validate_hub_url() {
-    local url="$1"
-    if echo "$url" | grep -q "/macros/library/"; then
-        print_error "Hub URL is a library URL, not a web app URL!"
-        echo "  Got: $url"
-        echo ""
-        echo "  Library URLs (/macros/library/d/.../N) cannot receive HTTP requests."
-        echo "  You need the web app URL which looks like:"
-        echo "    https://script.google.com/macros/s/DEPLOYMENT_ID/exec"
-        echo ""
-        echo "  To get the correct URL, run 'clasp deployments' in the central-hub/ directory."
-        return 1
-    fi
-    return 0
-}
-
-# Get Hub URL from central-hub/.hub_url or use default
-get_hub_url() {
-    local hub_url_file="$SCRIPT_DIR/central-hub/.hub_url"
-
-    if [ -f "$hub_url_file" ]; then
-        cat "$hub_url_file"
-    elif [ -n "$DEFAULT_HUB_URL" ]; then
-        echo "$DEFAULT_HUB_URL"
-    else
-        echo ""
-    fi
-}
-
-# Prompt for Hub registration (User instances only)
-prompt_hub_registration() {
-    local webapp_url=$(get_webapp_url)
-
-    if [ -z "$webapp_url" ]; then
-        print_warning "No deployment found - skipping Hub registration"
-        return
-    fi
-
-    echo ""
-    echo -e "${YELLOW}Hub Registration${NC}"
-    echo "───────────────────────────────────────────────────────"
-
-    # Get Hub URL (from local .hub_url file or default)
-    local detected_hub_url=$(get_hub_url)
-
-    echo "Your webhook URL: $webapp_url"
-    echo ""
-
-    read -p "Register/update with Hub? (y/n): " DO_REG
-
-    if [ "$DO_REG" = "y" ] || [ "$DO_REG" = "Y" ]; then
-        local hub_url
-        if [ -n "$detected_hub_url" ]; then
-            echo ""
-            echo "Hub URL options:"
-            echo -e "  Detected: ${CYAN}$detected_hub_url${NC}"
-            echo ""
-            read -p "Use this Hub URL? (y/n): " USE_DETECTED
-
-            if [ "$USE_DETECTED" = "y" ] || [ "$USE_DETECTED" = "Y" ]; then
-                hub_url="$detected_hub_url"
-            else
-                echo ""
-                read -p "Enter Hub URL: " hub_url
-            fi
-        else
-            echo ""
-            print_info "No Hub URL detected in central-hub/.hub_url"
-            read -p "Enter Hub URL (or press Enter to skip): " hub_url
-        fi
-
-        # Validate URL format before attempting registration
-        if [ -z "$hub_url" ]; then
-            print_error "No Hub URL available."
-            echo "  Deploy the Central Hub first, then either:"
-            echo "    - Place the web app URL in central-hub/.hub_url"
-            echo "    - Or set DEFAULT_HUB_URL in setup.sh"
-            return
-        fi
-
-        if ! validate_hub_url "$hub_url"; then
-            read -p "Enter the correct web app URL (or press Enter to skip): " hub_url
-            if [ -z "$hub_url" ]; then
-                print_info "Skipped Hub registration"
-                return
-            fi
-            # Validate the manually entered URL too
-            if ! validate_hub_url "$hub_url"; then
-                print_error "Still not a valid web app URL. Skipping registration."
-                return
-            fi
-        fi
-
-        register_with_hub "$webapp_url" "$hub_url"
-    else
-        print_info "Skipped Hub registration"
-        echo "You can register later by running setup again."
-        echo "Note: Registration data is stored on the Hub's Google Sheet."
-    fi
-}
-
-# ============================================================================
 # SWITCH ACCOUNT
 # ============================================================================
 
@@ -919,24 +673,29 @@ show_completion() {
         echo ""
         echo "  1. Open the Hub spreadsheet and REFRESH the page"
         echo "  2. Click: Hub Admin > Initial Setup"
-        echo "  3. Click: Hub Admin > Configure Chat Webhook"
-        echo "  4. Click: Hub Admin > Configure Chat Space"
+        echo "  3. Set up as Chat App in Google Cloud Console"
+        echo "  4. Add the Chat App to your Chat space"
+        echo "  5. Click: Hub Admin > Configure Chat Webhook"
+        echo "  6. Click: Hub Admin > Configure Chat Space"
         echo ""
-        if [ -f "$SRC_DIR/.hub_url" ]; then
-            echo -e "Hub URL: ${YELLOW}$(cat "$SRC_DIR/.hub_url")${NC}"
-            echo ""
-            echo "This URL is saved to central-hub/.hub_url and pushed to the repo."
-            echo "User instances will auto-detect it on next setup."
-        fi
+        echo -e "${YELLOW}  NOTE: The Hub has NO web app deployment.${NC}"
+        echo "  All input comes through Google Chat messages."
+        echo "  User webhook URLs are stored in the Registry sheet."
     else
         echo "Next steps for User Instance:"
         echo ""
         echo "  1. Open the Google Sheet and REFRESH the page"
         echo "  2. Click: Smart Call Time > Email Sorter > Setup"
         echo "  3. Configure labels on the Labels sheet"
+        echo "  4. Register with Hub: Settings > Register with Hub"
         echo ""
-        echo "Hub registration data is stored on the Hub's Google Sheet."
-        echo "Run setup and select 'Register with Hub' to connect."
+        echo "  Registration posts a REGISTER message to Google Chat."
+        echo "  The Hub will see it, store your webhook URL, and confirm."
+
+        if [ -f "$SRC_DIR/.webapp_url" ]; then
+            echo ""
+            echo -e "  Your webhook URL: ${CYAN}$(cat "$SRC_DIR/.webapp_url")${NC}"
+        fi
     fi
     echo ""
 }
@@ -955,8 +714,6 @@ clean_start() {
     [ -f "$HOME/.clasp.json" ] && echo "  - ~/.clasp.json (home directory)"
     echo ""
     echo "This does NOT delete your Google Sheets or Apps Script projects."
-    echo "Hub URL (central-hub/.hub_url) is preserved since it's shared via git."
-    echo "Registration data on the Hub is NOT affected."
     echo ""
     read -p "Continue? (yes/no): " CONFIRM
 
@@ -965,6 +722,7 @@ clean_start() {
         rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
         rm -f "$SCRIPT_DIR/src/.webapp_url"
         rm -f "$SCRIPT_DIR/central-hub/.webapp_url"
+        rm -f "$SCRIPT_DIR/central-hub/.hub_url"
         rm -f "$HOME/.clasp.json"
         echo ""
         print_success "Local configuration removed"
@@ -1019,12 +777,11 @@ full_reset() {
     echo "  3. Hard reset all local code to match remote exactly"
     echo ""
     echo "Your Google Sheets and Apps Script projects are NOT affected."
-    echo "Registration data on the Hub is NOT affected."
     echo ""
     read -p "Continue with full reset? (yes/no): " CONFIRM
 
     if [ "$CONFIRM" = "yes" ]; then
-        # Delete local config files (hub_url is tracked in git, preserved by reset)
+        # Delete local config files
         rm -f "$SCRIPT_DIR/src/.clasp.json"
         rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
         rm -f "$HOME/.clasp.json"
@@ -1075,6 +832,10 @@ case "${1:-}" in
         echo "  --clean   Remove local config files (keep code)"
         echo "  --reset   Full reset: delete config AND reset code to remote"
         echo "  --help    Show this help"
+        echo ""
+        echo "Architecture:"
+        echo "  Hub:  Chat App only (no web app). All input via Google Chat."
+        echo "  User: Web App. Receives webhooks from Hub. Sends chat messages to Hub."
         echo ""
         echo "Examples:"
         echo "  ./setup.sh           # Run interactive setup"
