@@ -87,6 +87,7 @@ function doPost(e) {
 function handleRegistrationConfirmed(data) {
   var instanceName = data.instanceName || 'unknown';
   var email = data.email || '';
+  var conversationId = data.conversationId || 'register';
 
   logAction('CONFIG', 'REGISTRATION_CONFIRMED',
     'Hub confirmed registration for ' + instanceName + ' (' + email + ')');
@@ -94,6 +95,17 @@ function handleRegistrationConfirmed(data) {
   // Store confirmation status
   setConfigValue('hub_registered', 'true');
   setConfigValue('hub_registered_at', new Date().toISOString());
+
+  // Post CONFIRMED back to chat to prove webhook round-trip works
+  // Hub will see this and delete all registration chat messages
+  var chatWebhookUrl = getChatWebhookUrl();
+  if (chatWebhookUrl) {
+    var confirmedMessage = buildChatMessage(instanceName, conversationId, 'CONFIRMED');
+    postToChat(chatWebhookUrl, confirmedMessage);
+    logAction('CONFIG', 'REGISTRATION_CONFIRMED_SENT', 'CONFIRMED posted to chat for ' + instanceName);
+  } else {
+    logAction('CONFIG', 'REGISTRATION_CONFIRM_SKIP', 'No chat_webhook_url - could not post CONFIRMED');
+  }
 
   return jsonResponse({
     success: true,

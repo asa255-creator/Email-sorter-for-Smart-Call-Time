@@ -216,33 +216,40 @@ function handleChatRegistration(parsed, fullMessage, messageName) {
 
     logHub('CHAT_REGISTRATION', instanceName + ' (' + regData.email + ') webhook=' + regData.webhook);
 
+    // Track the registration message for later cleanup (when CONFIRMED arrives)
+    var conversationId = 'register';
+    createPendingRequest(instanceName, conversationId, {
+      type: 'registration',
+      messageNames: messageName ? [messageName] : [],
+      startedAt: new Date().toISOString()
+    });
+
     // Send confirmation webhook to the user's deployed URL
+    // User must reply with CONFIRMED chat message to prove webhook works
     var confirmPayload = {
       action: 'registration_confirmed',
       instanceName: instanceName,
       email: regData.email,
-      message: 'Registration successful. Hub will route labels to your webhook.',
+      conversationId: conversationId,
+      message: 'Registration successful. Post CONFIRMED to chat to complete verification.',
       timestamp: new Date().toISOString()
     };
 
     var webhookResult = sendWebhookToUser(instanceName, confirmPayload);
 
     if (webhookResult.success) {
-      logHub('REGISTRATION_CONFIRMED', instanceName + ': webhook confirmation sent');
+      logHub('REGISTRATION_WEBHOOK_SENT', instanceName + ': waiting for CONFIRMED reply in chat');
     } else {
       logHub('REGISTRATION_CONFIRM_FAILED', instanceName + ': ' + webhookResult.error);
     }
 
-    // Delete the registration chat message (cleanup)
-    if (messageName) {
-      deleteChatMessages([messageName]);
-      logHub('REGISTRATION_MSG_DELETED', instanceName);
-    }
+    // Do NOT delete chat messages yet - wait for CONFIRMED from user
+    // The handleConfirmedMessage() handler will delete them when CONFIRMED arrives
 
     return {
       success: true,
       instanceName: instanceName,
-      webhookConfirmed: webhookResult.success
+      webhookSent: webhookResult.success
     };
 
   } catch (error) {
