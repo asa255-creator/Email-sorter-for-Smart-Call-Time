@@ -66,6 +66,8 @@ print_info() { echo -e "${BLUE}→ $1${NC}"; }
 CONFIG_FILES=(
     "src/.clasp.json"
     "central-hub/.clasp.json"
+    "src/.webapp_url"
+    "central-hub/.webapp_url"
 )
 
 # Backup config files to /tmp before reset
@@ -541,16 +543,26 @@ deploy_webapp() {
         print_info "No web app deployment found - creating one..."
         clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)"
         DEPLOY_ID=$(get_webapp_deployment_id)
+
+        # Fallback: parse deployment ID directly from clasp deploy output
+        if [ -z "$DEPLOY_ID" ]; then
+            print_info "Trying to extract deployment ID from clasp output..."
+            local deploy_output
+            deploy_output=$(clasp deployments 2>/dev/null || echo "")
+            DEPLOY_ID=$(echo "$deploy_output" | grep -oP '(?<=- )AKfycb[a-zA-Z0-9_-]+' | head -1)
+        fi
     fi
 
     if [ -n "$DEPLOY_ID" ]; then
         remove_extra_webapp_deployments "$DEPLOY_ID"
     fi
 
-    # Get deployment URL (web app only)
-
+    # Build and persist the deployment URL
     if [ -n "$DEPLOY_ID" ]; then
         WEBAPP_URL="https://script.google.com/macros/s/$DEPLOY_ID/exec"
+
+        # Save URL so prompt_hub_registration can find it without re-querying clasp
+        echo "$WEBAPP_URL" > "$SRC_DIR/.webapp_url"
 
         echo ""
         echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
@@ -692,8 +704,15 @@ pre_authorize() {
 # HUB REGISTRATION (User Instances Only)
 # ============================================================================
 
-# Get the current webapp URL from clasp deployments
+# Get the current webapp URL - checks saved file first, then queries clasp
 get_webapp_url() {
+    # First check if deploy_webapp saved the URL already
+    if [ -f "$SRC_DIR/.webapp_url" ]; then
+        cat "$SRC_DIR/.webapp_url"
+        return
+    fi
+
+    # Fallback: query clasp deployments
     cd "$SRC_DIR"
     local deploy_id
     deploy_id=$(get_webapp_deployment_id)
@@ -701,7 +720,15 @@ get_webapp_url() {
     if [ -n "$deploy_id" ]; then
         echo "https://script.google.com/macros/s/$deploy_id/exec"
     else
-        echo ""
+        # Last resort: try plain text parsing of clasp deployments
+        local deploy_output
+        deploy_output=$(clasp deployments 2>/dev/null || echo "")
+        deploy_id=$(echo "$deploy_output" | grep -oP '(?<=- )AKfycb[a-zA-Z0-9_-]+' | head -1)
+        if [ -n "$deploy_id" ]; then
+            echo "https://script.google.com/macros/s/$deploy_id/exec"
+        else
+            echo ""
+        fi
     fi
 }
 
@@ -938,6 +965,8 @@ clean_start() {
     if [ "$CONFIRM" = "yes" ]; then
         rm -f "$SCRIPT_DIR/src/.clasp.json"
         rm -f "$SCRIPT_DIR/central-hub/.clasp.json"
+        rm -f "$SCRIPT_DIR/src/.webapp_url"
+        rm -f "$SCRIPT_DIR/central-hub/.webapp_url"
         rm -f "$HOME/.clasp.json"
         echo ""
         print_success "Local configuration removed"

@@ -5,6 +5,8 @@ central-hub/.clasp.json
 
 # Local deployment info
 central-hub/.chat_space_id
+src/.webapp_url
+central-hub/.webapp_url
 
 # Node
 node_modules/
