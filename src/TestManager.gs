@@ -2,8 +2,11 @@
  * Smart Call Time - Test Manager
  *
  * Provides menu-driven test workflows for webhook and chat connectivity.
- * These tests reuse the existing routing/webhook primitives so only the
- * message contents change.
+ *
+ * Communication model:
+ * - User -> Hub: Via Google Chat messages (no HTTP to Hub)
+ * - Hub -> User: Via webhooks to our deployed web app URL
+ * - Webhook URLs stored in Config sheet (chat_webhook_url, webhook_url)
  */
 
 // ============================================================================
@@ -11,97 +14,60 @@
 // ============================================================================
 
 /**
- * Tests webhook connectivity: User -> Hub -> User.
- */
-function testWebhookPingFromUser() {
-  const ui = SpreadsheetApp.getUi();
-  const hubUrl = getHubUrl();
-
-  if (!hubUrl) {
-    ui.alert('Not Configured', 'Hub URL is not set. Run Setup or reconnect to the Hub.', ui.ButtonSet.OK);
-    return;
-  }
-
-  const instanceName = getInstanceName();
-  const testId = Utilities.getUuid();
-
-  const payload = {
-    action: 'test_webhook_ping',
-    instanceName: instanceName,
-    testId: testId,
-    message: 'This is a test',
-    origin: 'user'
-  };
-
-  const result = sendWebhookToHub(hubUrl, payload);
-
-  if (result.success) {
-    logAction('SYSTEM', 'TEST_WEBHOOK_PING_SENT', `Sent ping to Hub (${testId})`);
-    ui.alert('Ping Sent', 'Webhook ping sent to Hub. Wait for "test successful" to appear in the Log sheet.', ui.ButtonSet.OK);
-  } else {
-    ui.alert('Failed', `Could not send ping: ${result.error}`, ui.ButtonSet.OK);
-  }
-}
-
-/**
  * Tests chat connectivity: User -> Chat -> Hub -> User.
+ * Posts a test message to chat, Hub sees it and sends webhook back.
  */
 function testChatConnectionFromUser() {
-  const ui = SpreadsheetApp.getUi();
-  const webhookUrl = getConfigValue('chat_webhook_url');
+  var ui = SpreadsheetApp.getUi();
+  var webhookUrl = getConfigValue('chat_webhook_url');
 
   if (!webhookUrl) {
     ui.alert('Not Configured', 'Chat webhook URL not set. Configure chat_webhook_url first.', ui.ButtonSet.OK);
     return;
   }
 
-  const instanceName = getInstanceName();
-  const testId = Utilities.getUuid();
-  const message = buildTestChatMessage(instanceName, testId);
+  var instanceName = getInstanceName();
+  var testId = Utilities.getUuid();
+  var message = buildTestChatMessage(instanceName, testId);
 
   postToChat(webhookUrl, message);
-  logAction('SYSTEM', 'TEST_CHAT_SENT', `Sent chat test message (${testId})`);
+  logAction('SYSTEM', 'TEST_CHAT_SENT', 'Sent chat test message (' + testId + ')');
 
   ui.alert('Test Sent', 'Chat test message sent. Wait for "test successful" in the Log sheet.', ui.ButtonSet.OK);
 }
 
+/**
+ * Tests webhook ping: Hub -> User (one-way).
+ * This test must be initiated from the Hub side (Hub Admin menu).
+ */
+function testWebhookPingFromUser() {
+  var ui = SpreadsheetApp.getUi();
+
+  ui.alert('Webhook Ping Test',
+    'This test verifies the Hub can reach your webhook.\n\n' +
+    'To run it:\n' +
+    '1. Open the Hub spreadsheet\n' +
+    '2. Click: Hub Admin > Test Webhook Ping\n' +
+    '3. Enter your instance name\n' +
+    '4. Check this sheet\'s Log for the result\n\n' +
+    'The Hub sends a ping to your webhook URL.\n' +
+    'Your webhook URL: ' + (getWebhookUrl() || '(not set)'),
+    ui.ButtonSet.OK);
+}
+
 // ============================================================================
-// INBOUND TEST HANDLERS (USER WEBHOOK)
+// INBOUND TEST HANDLERS (HUB -> USER WEBHOOK)
 // ============================================================================
 
 /**
- * Handles Hub -> User test ping by replying back to Hub.
+ * Handles Hub -> User test ping.
  *
  * @param {Object} data - Webhook payload
  * @returns {TextOutput} JSON response
  */
 function handleTestWebhookPing(data) {
-  const hubUrl = getHubUrl();
-  const instanceName = getInstanceName();
-
-  logAction('SYSTEM', 'TEST_WEBHOOK_PING_RECEIVED', `Ping from Hub (${data.testId || 'no-id'})`);
-
-  if (!hubUrl) {
-    return jsonResponse({ success: false, error: 'Hub URL not configured' });
-  }
-
-  const payload = {
-    action: 'test_webhook_success',
-    instanceName: instanceName,
-    testId: data.testId || '',
-    message: 'Test successful',
-    origin: 'user'
-  };
-
-  const result = sendWebhookToHub(hubUrl, payload);
-
-  if (result.success) {
-    logAction('SYSTEM', 'TEST_WEBHOOK_SUCCESS_SENT', `Sent success to Hub (${data.testId || 'no-id'})`);
-    return jsonResponse({ success: true, status: 'sent' });
-  }
-
-  logAction('SYSTEM', 'TEST_WEBHOOK_SUCCESS_FAILED', result.error || 'Unknown error');
-  return jsonResponse({ success: false, error: result.error });
+  logAction('SYSTEM', 'TEST_WEBHOOK_PING_RECEIVED', 'Ping from Hub (' + (data.testId || 'no-id') + ')');
+  return jsonResponse({ success: true, status: 'pong', testId: data.testId || '' });
 }
 
 /**
@@ -111,7 +77,7 @@ function handleTestWebhookPing(data) {
  * @returns {TextOutput} JSON response
  */
 function handleTestWebhookSuccess(data) {
-  logAction('SYSTEM', 'TEST_WEBHOOK_SUCCESS', `Test successful (${data.testId || 'no-id'})`);
+  logAction('SYSTEM', 'TEST_WEBHOOK_SUCCESS', 'Test successful (' + (data.testId || 'no-id') + ')');
   return jsonResponse({ success: true, status: 'ack' });
 }
 
@@ -122,19 +88,19 @@ function handleTestWebhookSuccess(data) {
  * @returns {TextOutput} JSON response
  */
 function handleTestChatRequest(data) {
-  const webhookUrl = getConfigValue('chat_webhook_url');
-  const instanceName = getInstanceName();
-  const testId = data.testId || Utilities.getUuid();
+  var webhookUrl = getConfigValue('chat_webhook_url');
+  var instanceName = getInstanceName();
+  var testId = data.testId || Utilities.getUuid();
 
   if (!webhookUrl) {
     logAction('SYSTEM', 'TEST_CHAT_REQUEST_FAILED', 'chat_webhook_url not configured');
     return jsonResponse({ success: false, error: 'Chat webhook URL not configured' });
   }
 
-  const message = buildTestChatMessage(instanceName, testId);
+  var message = buildTestChatMessage(instanceName, testId);
   postToChat(webhookUrl, message);
 
-  logAction('SYSTEM', 'TEST_CHAT_SENT', `Sent chat test message (${testId})`);
+  logAction('SYSTEM', 'TEST_CHAT_SENT', 'Sent chat test message (' + testId + ')');
   return jsonResponse({ success: true, status: 'sent', testId: testId });
 }
 
@@ -145,12 +111,12 @@ function handleTestChatRequest(data) {
  * @returns {TextOutput} JSON response
  */
 function handleTestChatSuccess(data) {
-  logAction('SYSTEM', 'TEST_CHAT_SUCCESS', `Test successful (${data.testId || 'no-id'})`);
+  logAction('SYSTEM', 'TEST_CHAT_SUCCESS', 'Test successful (' + (data.testId || 'no-id') + ')');
   return jsonResponse({ success: true, status: 'ack' });
 }
 
 // ============================================================================
-// SHEETS CHAT TEST (User → Chat → Hub → Webhook → User → Chat → Hub deletes)
+// SHEETS CHAT TEST (User -> Chat -> Hub -> Webhook -> User -> Chat -> Hub deletes)
 // ============================================================================
 
 /**
@@ -273,35 +239,6 @@ function handleTestSheetsChatComplete(data) {
 // ============================================================================
 // HELPERS
 // ============================================================================
-
-/**
- * Sends a JSON payload to the Hub.
- *
- * @param {string} hubUrl - Hub web app URL
- * @param {Object} payload - Payload to send
- * @returns {Object} Result
- */
-function sendWebhookToHub(hubUrl, payload) {
-  try {
-    const response = UrlFetchApp.fetch(hubUrl, {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    });
-
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-
-    if (responseCode === 200) {
-      return { success: true, responseText: responseText };
-    }
-
-    return { success: false, error: `Hub returned HTTP ${responseCode}: ${responseText}` };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-}
 
 /**
  * Builds a chat test message that the Hub can recognize.

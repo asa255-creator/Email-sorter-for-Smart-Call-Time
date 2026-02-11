@@ -3,6 +3,13 @@
  * Configuration Manager Module
  *
  * Handles reading and writing configuration values from the Config sheet.
+ *
+ * Webhook URLs are stored in the Config sheet:
+ * - chat_webhook_url: Google Chat space webhook for posting messages
+ * - webhook_url: This instance's deployed web app URL (for receiving from Hub)
+ *
+ * The Hub does NOT have a web app. All communication TO the Hub goes through
+ * Google Chat messages. The Hub sends webhooks TO this instance.
  */
 
 // ============================================================================
@@ -15,14 +22,14 @@
  * @returns {string|null} The configuration value or null if not found
  */
 function getConfigValue(key) {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Config');
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Config');
 
   if (!sheet) return null;
 
-  const data = sheet.getDataRange().getValues();
+  var data = sheet.getDataRange().getValues();
 
-  for (let i = 1; i < data.length; i++) {
+  for (var i = 1; i < data.length; i++) {
     if (data[i][0] === key) {
       return data[i][1];
     }
@@ -38,15 +45,15 @@ function getConfigValue(key) {
  * @param {string} value - The value to set
  */
 function setConfigValue(key, value) {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Config');
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Config');
 
   if (!sheet) return;
 
-  const data = sheet.getDataRange().getValues();
+  var data = sheet.getDataRange().getValues();
 
   // Look for existing key
-  for (let i = 1; i < data.length; i++) {
+  for (var i = 1; i < data.length; i++) {
     if (data[i][0] === key) {
       sheet.getRange(i + 1, 2).setValue(value);
       return;
@@ -54,7 +61,7 @@ function setConfigValue(key, value) {
   }
 
   // Key not found, add new row
-  const lastRow = sheet.getLastRow();
+  var lastRow = sheet.getLastRow();
   sheet.getRange(lastRow + 1, 1, 1, 2).setValues([[key, value]]);
 }
 
@@ -63,15 +70,15 @@ function setConfigValue(key, value) {
  * @returns {Object} Object with all config key-value pairs
  */
 function getAllConfig() {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Config');
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Config');
 
   if (!sheet) return {};
 
-  const data = sheet.getDataRange().getValues();
-  const config = {};
+  var data = sheet.getDataRange().getValues();
+  var config = {};
 
-  for (let i = 1; i < data.length; i++) {
+  for (var i = 1; i < data.length; i++) {
     if (data[i][0]) {
       config[data[i][0]] = data[i][1];
     }
@@ -85,14 +92,14 @@ function getAllConfig() {
  * @param {string} key - The configuration key to delete
  */
 function deleteConfigValue(key) {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Config');
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Config');
 
   if (!sheet) return;
 
-  const data = sheet.getDataRange().getValues();
+  var data = sheet.getDataRange().getValues();
 
-  for (let i = 1; i < data.length; i++) {
+  for (var i = 1; i < data.length; i++) {
     if (data[i][0] === key) {
       sheet.deleteRow(i + 1);
       return;
@@ -127,7 +134,9 @@ function setConfig(key, value) {
 // ============================================================================
 
 /**
- * Gets the webhook URL for this instance.
+ * Gets the webhook URL for this instance (our deployed web app URL).
+ * Hub sends webhooks TO this URL.
+ * Stored in Config sheet under key 'webhook_url'.
  * @returns {string|null} The webhook URL
  */
 function getWebhookUrl() {
@@ -143,19 +152,12 @@ function setWebhookUrl(url) {
 }
 
 /**
- * Gets the Central Hub URL.
- * @returns {string|null} The hub URL
+ * Gets the Google Chat webhook URL for posting messages to the chat space.
+ * Stored in Config sheet under key 'chat_webhook_url'.
+ * @returns {string|null} The chat webhook URL
  */
-function getHubUrl() {
-  return getConfigValue('hub_url');
-}
-
-/**
- * Sets the Central Hub URL.
- * @param {string} url - The hub URL
- */
-function setHubUrl(url) {
-  setConfigValue('hub_url', url);
+function getChatWebhookUrl() {
+  return getConfigValue('chat_webhook_url');
 }
 
 /**
@@ -164,11 +166,11 @@ function setHubUrl(url) {
  * @returns {string} The instance name
  */
 function getInstanceName() {
-  let name = getConfigValue('instance_name');
+  var name = getConfigValue('instance_name');
 
   if (!name) {
     // Auto-generate from user email
-    const email = Session.getActiveUser().getEmail();
+    var email = Session.getActiveUser().getEmail();
     name = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '_');
     setConfigValue('instance_name', name);
   }
@@ -176,100 +178,91 @@ function getInstanceName() {
   return name;
 }
 
+// ============================================================================
+// REGISTRATION VIA CHAT
+// ============================================================================
+
 /**
- * Registers this instance with the Central Hub.
- * Called during setup or reconnect.
- * @param {string} hubUrl - The Hub's web app URL
- * @returns {Object} Registration result
+ * Registers this instance with the Hub by posting a REGISTER message to Google Chat.
+ *
+ * The Hub has NO web app - all communication goes through Chat.
+ * Registration message format:
+ *   @instanceName:[register] REGISTER
+ *   email=user@example.com
+ *   webhook=https://script.google.com/macros/s/.../exec
+ *   sheetId=SPREADSHEET_ID
+ *
+ * The Hub's onMessage() handler will:
+ * 1. Parse the registration data
+ * 2. Store it in the Registry sheet (webhook URL stored in Hub's Google Sheet)
+ * 3. Send a confirmation webhook to our webhook URL
+ * 4. Delete the registration chat message
+ *
+ * @returns {Object} Result
  */
-function registerWithHub(hubUrl) {
-  if (!hubUrl) {
-    return { success: false, error: 'No hub URL provided' };
+function registerWithHub() {
+  var chatWebhookUrl = getChatWebhookUrl();
+  if (!chatWebhookUrl) {
+    return { success: false, error: 'No chat_webhook_url configured. Set it in the Config sheet.' };
   }
 
-  const webhookUrl = getWebhookUrl();
+  var webhookUrl = getWebhookUrl();
   if (!webhookUrl) {
     return { success: false, error: 'Webhook URL not set. Deploy as web app first.' };
   }
 
-  const instanceName = getInstanceName();
-  const email = Session.getActiveUser().getEmail();
-  const sheetId = SpreadsheetApp.getActive().getId();
+  var instanceName = getInstanceName();
+  var email = Session.getActiveUser().getEmail();
+  var sheetId = SpreadsheetApp.getActive().getId();
 
-  try {
-    const response = UrlFetchApp.fetch(hubUrl, {
-      method: 'POST',
-      contentType: 'application/json',
-      payload: JSON.stringify({
-        action: 'register',
-        email: email,
-        sheetId: sheetId,
-        instanceName: instanceName,
-        webhookUrl: webhookUrl
-      }),
-      muteHttpExceptions: true
-    });
+  // Build registration message using consistent chat format
+  var body = 'email=' + email + '\n' +
+             'webhook=' + webhookUrl + '\n' +
+             'sheetId=' + sheetId;
 
-    const result = JSON.parse(response.getContentText());
+  var message = buildChatMessage(instanceName, 'register', 'REGISTER', body);
 
-    if (result.success) {
-      setHubUrl(hubUrl);
-      logAction('CONFIG', 'HUB_REGISTERED', `Registered with hub: ${instanceName}`);
-    }
+  // Post to Google Chat (Hub will see it via onMessage)
+  postToChat(chatWebhookUrl, message);
 
-    return result;
+  logAction('CONFIG', 'REGISTER_SENT', 'Registration posted to chat for ' + instanceName);
 
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
+  return {
+    success: true,
+    message: 'Registration message sent to Chat. Hub will confirm via webhook.',
+    instanceName: instanceName
+  };
 }
 
 // ============================================================================
-// HUB COMMUNICATION
+// HUB COMMUNICATION VIA CHAT
 // ============================================================================
 
 /**
- * Notifies the Hub that email processing is complete.
+ * Notifies the Hub that email processing is complete by posting to Chat.
  * Hub will delete related Chat messages and clean up pending request.
  *
+ * Posts: @instanceName:[emailId] CONFIRM_COMPLETE
+ *
  * @param {string} emailId - The email ID that was processed
- * @returns {Object} Result from Hub
+ * @returns {Object} Result
  */
 function notifyHubComplete(emailId) {
-  const hubUrl = getHubUrl();
-  if (!hubUrl) {
-    logAction('CONFIG', 'HUB_NOTIFY_SKIP', 'No hub URL configured');
-    return { success: false, error: 'No hub URL configured' };
+  var chatWebhookUrl = getChatWebhookUrl();
+  if (!chatWebhookUrl) {
+    logAction('CONFIG', 'HUB_NOTIFY_SKIP', 'No chat_webhook_url configured');
+    return { success: false, error: 'No chat_webhook_url configured' };
   }
 
-  const instanceName = getInstanceName();
+  var instanceName = getInstanceName();
 
-  try {
-    const response = UrlFetchApp.fetch(hubUrl, {
-      method: 'POST',
-      contentType: 'application/json',
-      payload: JSON.stringify({
-        action: 'confirm_complete',
-        instanceName: instanceName,
-        emailId: emailId
-      }),
-      muteHttpExceptions: true
-    });
+  // Post CONFIRM_COMPLETE to chat - Hub's onMessage will handle cleanup
+  var message = buildChatMessage(instanceName, emailId, 'CONFIRM_COMPLETE');
+  postToChat(chatWebhookUrl, message);
 
-    const result = JSON.parse(response.getContentText());
+  logAction(emailId, 'HUB_NOTIFIED', 'CONFIRM_COMPLETE posted to chat');
 
-    if (result.success) {
-      logAction(emailId, 'HUB_NOTIFIED', 'Processing complete sent to Hub');
-    } else {
-      logAction(emailId, 'HUB_NOTIFY_ERROR', result.error || 'Unknown error');
-    }
-
-    return result;
-
-  } catch (error) {
-    logAction(emailId, 'HUB_NOTIFY_ERROR', error.message);
-    return { success: false, error: error.message };
-  }
+  return { success: true };
 }
 
 // ============================================================================
@@ -279,7 +272,7 @@ function notifyHubComplete(emailId) {
 /**
  * Default configuration values.
  */
-const DEFAULT_CONFIG = {
+var DEFAULT_CONFIG = {
   rate_limit_ms: '3000',
   batch_size: '50',
   version: '1.0.0'
@@ -289,7 +282,7 @@ const DEFAULT_CONFIG = {
  * Ensures all default config values exist.
  */
 function ensureDefaultConfig() {
-  Object.keys(DEFAULT_CONFIG).forEach(key => {
+  Object.keys(DEFAULT_CONFIG).forEach(function(key) {
     if (!getConfigValue(key)) {
       setConfigValue(key, DEFAULT_CONFIG[key]);
     }

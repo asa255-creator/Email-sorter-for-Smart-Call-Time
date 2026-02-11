@@ -2,7 +2,8 @@
  * Central Hub - Test Manager
  *
  * Menu-driven tests for webhook and chat connectivity.
- * These reuse the same webhook routing primitives as production flow.
+ * All Hub input comes through Chat (onMessage). The Hub sends
+ * outbound webhooks to user instances.
  */
 
 // ============================================================================
@@ -10,44 +11,46 @@
 // ============================================================================
 
 /**
- * Tests webhook connectivity: Hub -> User -> Hub.
+ * Tests webhook connectivity: Hub -> User (one-way webhook from Hub).
+ * Hub sends a ping to the user's webhook URL.
  */
 function testWebhookPingFromHub() {
-  const ui = SpreadsheetApp.getUi();
-  const instanceName = promptForTestInstance(ui);
+  var ui = SpreadsheetApp.getUi();
+  var instanceName = promptForTestInstance(ui);
 
   if (!instanceName) return;
 
-  const testId = Utilities.getUuid();
-  const payload = {
+  var testId = Utilities.getUuid();
+  var payload = {
     action: 'test_webhook_ping',
     instanceName: instanceName,
     testId: testId,
-    message: 'This is a test',
+    message: 'Ping from Hub',
     origin: 'hub'
   };
 
-  const result = sendWebhookToUser(instanceName, payload);
+  var result = sendWebhookToUser(instanceName, payload);
 
   if (result.success) {
-    logHub('TEST_WEBHOOK_PING_SENT', `${instanceName} (${testId})`);
-    ui.alert('Ping Sent', 'Webhook ping sent to user. Wait for "test successful" in HubLog.', ui.ButtonSet.OK);
+    logHub('TEST_WEBHOOK_PING_SENT', instanceName + ' (' + testId + ')');
+    ui.alert('Ping Sent', 'Webhook ping sent to user. Check user Log sheet for confirmation.', ui.ButtonSet.OK);
   } else {
-    ui.alert('Failed', `Could not send ping: ${result.error}`, ui.ButtonSet.OK);
+    ui.alert('Failed', 'Could not send ping: ' + result.error, ui.ButtonSet.OK);
   }
 }
 
 /**
  * Tests chat connectivity: Hub -> User -> Chat -> Hub.
+ * Hub sends webhook to user asking them to post to chat.
  */
 function testChatConnectionFromHub() {
-  const ui = SpreadsheetApp.getUi();
-  const instanceName = promptForTestInstance(ui);
+  var ui = SpreadsheetApp.getUi();
+  var instanceName = promptForTestInstance(ui);
 
   if (!instanceName) return;
 
-  const testId = Utilities.getUuid();
-  const payload = {
+  var testId = Utilities.getUuid();
+  var payload = {
     action: 'test_chat_request',
     instanceName: instanceName,
     testId: testId,
@@ -55,64 +58,14 @@ function testChatConnectionFromHub() {
     origin: 'hub'
   };
 
-  const result = sendWebhookToUser(instanceName, payload);
+  var result = sendWebhookToUser(instanceName, payload);
 
   if (result.success) {
-    logHub('TEST_CHAT_REQUEST_SENT', `${instanceName} (${testId})`);
-    ui.alert('Request Sent', 'Chat test request sent to user. Wait for "test successful" in HubLog.', ui.ButtonSet.OK);
+    logHub('TEST_CHAT_REQUEST_SENT', instanceName + ' (' + testId + ')');
+    ui.alert('Request Sent', 'Chat test request sent to user. Wait for test message in HubLog.', ui.ButtonSet.OK);
   } else {
-    ui.alert('Failed', `Could not send chat request: ${result.error}`, ui.ButtonSet.OK);
+    ui.alert('Failed', 'Could not send chat request: ' + result.error, ui.ButtonSet.OK);
   }
-}
-
-// ============================================================================
-// WEBHOOK HANDLERS (HUB)
-// ============================================================================
-
-/**
- * Handles User -> Hub test webhook ping.
- *
- * @param {Object} data - Request payload
- * @returns {Object} Result
- */
-function handleTestWebhookPing(data) {
-  const instanceName = data.instanceName;
-
-  if (!instanceName) {
-    return { success: false, error: 'Missing instanceName' };
-  }
-
-  logHub('TEST_WEBHOOK_PING_RECEIVED', `${instanceName} (${data.testId || 'no-id'})`);
-
-  const payload = {
-    action: 'test_webhook_success',
-    instanceName: instanceName,
-    testId: data.testId || '',
-    message: 'Test successful',
-    origin: 'hub',
-    timestamp: new Date().toISOString()
-  };
-
-  const result = sendWebhookToUser(instanceName, payload);
-
-  if (result.success) {
-    logHub('TEST_WEBHOOK_SUCCESS_SENT', `${instanceName} (${data.testId || 'no-id'})`);
-    return { success: true };
-  }
-
-  logHub('TEST_WEBHOOK_SUCCESS_FAILED', `${instanceName}: ${result.error}`);
-  return { success: false, error: result.error };
-}
-
-/**
- * Handles User -> Hub success response for webhook test.
- *
- * @param {Object} data - Request payload
- * @returns {Object} Result
- */
-function handleTestWebhookSuccess(data) {
-  logHub('TEST_WEBHOOK_SUCCESS', `${data.instanceName || 'unknown'} (${data.testId || 'no-id'})`);
-  return { success: true };
 }
 
 // ============================================================================
@@ -174,17 +127,17 @@ function testSheetsChatFromHub() {
  * @returns {string|null} Instance name
  */
 function promptForTestInstance(ui) {
-  const users = getAllActiveUsers();
+  var users = getAllActiveUsers();
 
   if (users.length === 0) {
     ui.alert('No Users', 'No registered users to test with.', ui.ButtonSet.OK);
     return null;
   }
 
-  const list = users.map(user => user.instanceName).join(', ');
-  const response = ui.prompt(
+  var list = users.map(function(user) { return user.instanceName; }).join(', ');
+  var response = ui.prompt(
     'Select User',
-    `Enter instance name to test.\n\nRegistered: ${list}`,
+    'Enter instance name to test.\n\nRegistered: ' + list,
     ui.ButtonSet.OK_CANCEL
   );
 
@@ -192,7 +145,7 @@ function promptForTestInstance(ui) {
     return null;
   }
 
-  const instanceName = response.getResponseText().trim();
+  var instanceName = response.getResponseText().trim();
   if (!instanceName) {
     ui.alert('Missing Instance', 'Please enter a valid instance name.', ui.ButtonSet.OK);
     return null;
