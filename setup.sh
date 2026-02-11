@@ -60,6 +60,7 @@ CONFIG_FILES=(
     "central-hub/.clasp.json"
     "src/.webapp_url"
     "central-hub/.webapp_url"
+    "central-hub/.hub_url"
 )
 
 # Backup config files to /tmp before reset
@@ -833,21 +834,24 @@ prompt_hub_registration() {
     read -p "Register/update with Hub? (y/n): " DO_REG
 
     if [ "$DO_REG" = "y" ] || [ "$DO_REG" = "Y" ]; then
-        echo ""
-        echo "Hub URL options:"
-        echo -e "  Detected: ${CYAN}$detected_hub_url${NC}"
-        echo ""
-        read -p "Use this Hub URL? (y/n): " USE_DETECTED
-
         local hub_url
-        if [ "$USE_DETECTED" = "y" ] || [ "$USE_DETECTED" = "Y" ]; then
-            hub_url="$detected_hub_url"
+        if [ -n "$detected_hub_url" ]; then
+            echo ""
+            echo "Hub URL options:"
+            echo -e "  Detected: ${CYAN}$detected_hub_url${NC}"
+            echo ""
+            read -p "Use this Hub URL? (y/n): " USE_DETECTED
+
+            if [ "$USE_DETECTED" = "y" ] || [ "$USE_DETECTED" = "Y" ]; then
+                hub_url="$detected_hub_url"
+            else
+                echo ""
+                read -p "Enter Hub URL: " hub_url
+            fi
         else
             echo ""
-            read -p "Enter Hub URL: " hub_url
-            if [ -z "$hub_url" ]; then
-                hub_url="$detected_hub_url"
-            fi
+            print_info "No Hub URL detected in central-hub/.hub_url"
+            read -p "Enter Hub URL (or press Enter to skip): " hub_url
         fi
 
         # Validate URL format before attempting registration
