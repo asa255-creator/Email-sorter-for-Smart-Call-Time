@@ -12,15 +12,7 @@
 
 set -e
 
-# Select a Python interpreter for helper parsing scripts.
-if command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="python"
-else
-    echo "Error: Python is required for deployment metadata parsing. Install python3 (preferred) or python." >&2
-    exit 1
-fi
+# Python is no longer required - deployment parsing uses plain-text grep/awk.
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -421,126 +413,70 @@ push_code() {
 # DEPLOY WEB APP
 # ============================================================================
 
-# Remove library deployments so web app deployments are the only active webhook targets.
-remove_library_deployments() {
-    local deploy_json
-    deploy_json=$(clasp deployments --json 2>/dev/null || echo "")
+# Parse deployment IDs from plain-text `clasp deployments` output.
+#
+# `clasp deployments` prints lines like:
+#   2 Deployments.
+#   - AKfycbxxx @1 - Description text
+#   - AKfycbyyy @HEAD -
+#
+# @HEAD = dev/library deployment (auto-created, not a web app)
+# @N   = versioned deployment (these are the web app deployments)
 
-    if [ -z "$deploy_json" ]; then
-        return 0
-    fi
-
-    local library_ids
-    library_ids=$(echo "$deploy_json" | "$PYTHON_BIN" - <<'PY'
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-
-deployments = data.get("deployments", [])
-for deployment in deployments:
-    for entry in deployment.get("entryPoints", []):
-        if entry.get("entryPointType") == "LIBRARY":
-            deployment_id = deployment.get("deploymentId")
-            if deployment_id:
-                print(deployment_id)
-            break
-PY
-)
-
-    if [ -z "$library_ids" ]; then
-        return 0
-    fi
-
-    print_info "Removing existing library deployments..."
-
-    while read -r deploy_id; do
-        if [ -n "$deploy_id" ]; then
-            clasp undeploy "$deploy_id" 2>/dev/null || \
-            print_warning "Could not remove library deployment $deploy_id"
-        fi
-    done <<< "$library_ids"
-}
-
-# Get web app deployment IDs ordered newest-first.
+# Get ALL versioned deployment IDs (excluding @HEAD) from plain-text clasp output.
 get_webapp_deployment_ids() {
-    local deploy_json
-    deploy_json=$(clasp deployments --json 2>/dev/null || echo "")
+    local deploy_output
+    deploy_output=$(clasp deployments 2>/dev/null || echo "")
 
-    if [ -z "$deploy_json" ]; then
+    if [ -z "$deploy_output" ]; then
         return 0
     fi
 
-    echo "$deploy_json" | "$PYTHON_BIN" - <<'PY'
-import json, sys
-from datetime import datetime
-
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-
-deployments = data.get("deployments", [])
-webapps = []
-
-for deployment in deployments:
-    entry_points = deployment.get("entryPoints", [])
-    if any(entry.get("entryPointType") in ("WEB_APP", "WEBAPP") for entry in entry_points):
-        webapps.append(deployment)
-
-def sort_key(item):
-    return item.get("updateTime") or ""
-
-webapps.sort(key=sort_key, reverse=True)
-
-for deployment in webapps:
-    deployment_id = deployment.get("deploymentId")
-    if deployment_id:
-        print(deployment_id)
-PY
+    # Extract lines starting with "- AKfycb..." that are NOT @HEAD
+    echo "$deploy_output" | grep -E '^- AKfycb' | grep -v '@HEAD' | \
+        sed 's/^- //' | awk '{print $1}'
 }
 
-# Get the most recent web app deployment ID (ignores library deployments).
+# Get the @HEAD (dev/library) deployment ID.
+get_head_deployment_id() {
+    local deploy_output
+    deploy_output=$(clasp deployments 2>/dev/null || echo "")
+
+    if [ -z "$deploy_output" ]; then
+        echo ""
+        return 0
+    fi
+
+    echo "$deploy_output" | grep -E '^- AKfycb.*@HEAD' | \
+        sed 's/^- //' | awk '{print $1}'
+}
+
+# Get the most recent web app deployment ID (last versioned, highest @N).
 get_webapp_deployment_id() {
-    get_webapp_deployment_ids | head -1
+    get_webapp_deployment_ids | tail -1
 }
 
-# Get the most recent deployment ID of any type (fallback when entry point metadata is missing).
-get_latest_deployment_id_any_type() {
-    local deploy_json
-    deploy_json=$(clasp deployments --json 2>/dev/null || echo "")
-
-    if [ -z "$deploy_json" ]; then
-        return 0
-    fi
-
-    echo "$deploy_json" | python - <<'PY'
-import json, sys
-
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-
-deployments = data.get("deployments", [])
-deployments.sort(key=lambda item: item.get("updateTime") or "", reverse=True)
-
-for deployment in deployments:
-    deployment_id = deployment.get("deploymentId")
-    if deployment_id:
-        print(deployment_id)
-        break
-PY
-}
-
-# Extract deployment ID from clasp deploy output (e.g., "Deployed AKfy... @6").
+# Extract deployment ID from clasp deploy output (e.g., "- AKfycb... @6.").
 extract_deploy_id_from_output() {
     local output="$1"
-    echo "$output" | grep -o 'AKfy[a-zA-Z0-9_-]*' | head -1
+    echo "$output" | grep -o 'AKfycb[a-zA-Z0-9_-]*' | head -1
 }
 
-# Keep only the specified web app deployment active.
+# Remove the @HEAD library deployment so only web app deployments remain.
+remove_library_deployments() {
+    local head_id
+    head_id=$(get_head_deployment_id)
+
+    if [ -z "$head_id" ]; then
+        return 0
+    fi
+
+    print_info "Removing @HEAD library deployment..."
+    clasp undeploy "$head_id" 2>/dev/null || \
+        print_warning "Could not remove library deployment $head_id (may not exist)"
+}
+
+# Keep only the specified web app deployment active; remove extras.
 remove_extra_webapp_deployments() {
     local keep_id="$1"
     local webapp_ids
@@ -552,6 +488,7 @@ remove_extra_webapp_deployments() {
 
     while read -r deploy_id; do
         if [ -n "$deploy_id" ] && [ "$deploy_id" != "$keep_id" ]; then
+            print_info "Removing extra deployment $deploy_id..."
             clasp undeploy "$deploy_id" 2>/dev/null || \
             print_warning "Could not remove extra web app deployment $deploy_id"
         fi
@@ -563,13 +500,19 @@ deploy_webapp() {
 
     cd "$SRC_DIR"
 
+    # Show current deployments for debugging
+    print_info "Current deployments:"
+    clasp deployments 2>/dev/null || print_warning "Could not list deployments"
+    echo ""
+
     remove_library_deployments
 
-    # Check existing deployments
+    # Check for existing versioned (web app) deployment
     DEPLOY_ID=$(get_webapp_deployment_id)
 
     if [ -n "$DEPLOY_ID" ]; then
-        print_info "Found existing web app deployment - updating in place..."
+        print_success "Found existing web app deployment: $DEPLOY_ID"
+        print_info "Updating in place..."
         local deploy_output
         deploy_output=$(clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>&1)
         local deploy_exit=$?
@@ -585,16 +528,17 @@ deploy_webapp() {
             DEPLOY_ID="$output_deploy_id"
         fi
     else
-        print_info "No web app deployment found - creating one..."
-        clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)"
-        DEPLOY_ID=$(get_webapp_deployment_id)
+        print_info "No versioned web app deployment found - creating one..."
+        local create_output
+        create_output=$(clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)" 2>&1)
+        echo "$create_output"
 
-        # Fallback: parse deployment ID directly from clasp deploy output
+        # Extract deployment ID from the create output
+        DEPLOY_ID=$(extract_deploy_id_from_output "$create_output")
+
+        # Fallback: re-query deployments
         if [ -z "$DEPLOY_ID" ]; then
-            print_info "Trying to extract deployment ID from clasp output..."
-            local deploy_output
-            deploy_output=$(clasp deployments 2>/dev/null || echo "")
-            DEPLOY_ID=$(echo "$deploy_output" | grep -oP '(?<=- )AKfycb[a-zA-Z0-9_-]+' | head -1)
+            DEPLOY_ID=$(get_webapp_deployment_id)
         fi
     fi
 
