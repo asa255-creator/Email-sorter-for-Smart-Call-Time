@@ -30,6 +30,22 @@ function doPost(e) {
       return jsonResponse({ success: true, status: 'healthy', timestamp: new Date().toISOString() });
     }
 
+    if (data.action === 'test_webhook_ping') {
+      return handleTestWebhookPing(data);
+    }
+
+    if (data.action === 'test_webhook_success') {
+      return handleTestWebhookSuccess(data);
+    }
+
+    if (data.action === 'test_chat_request') {
+      return handleTestChatRequest(data);
+    }
+
+    if (data.action === 'test_chat_success') {
+      return handleTestChatSuccess(data);
+    }
+
     if (data.action === 'update_labels') {
       return handleLabelUpdate(data);
     }
