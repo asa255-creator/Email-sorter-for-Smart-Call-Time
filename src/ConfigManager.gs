@@ -137,10 +137,41 @@ function setConfig(key, value) {
  * Gets the webhook URL for this instance (our deployed web app URL).
  * Hub sends webhooks TO this URL.
  * Stored in Config sheet under key 'webhook_url'.
+ *
+ * If the Config sheet value is empty, attempts to auto-detect from
+ * ScriptApp.getService().getUrl() and saves it to the Config sheet.
+ *
  * @returns {string|null} The webhook URL
  */
 function getWebhookUrl() {
-  return getConfigValue('webhook_url');
+  var url = getConfigValue('webhook_url');
+  if (url) return url;
+
+  // Auto-detect: ScriptApp.getService().getUrl() returns the web app URL
+  // when the script is deployed as a web app.
+  url = detectWebAppUrl();
+  if (url) {
+    setConfigValue('webhook_url', url);
+    logAction('CONFIG', 'WEBHOOK_AUTO_DETECT', 'Auto-detected web app URL: ' + url);
+  }
+  return url;
+}
+
+/**
+ * Detects the deployed web app URL using ScriptApp.
+ * Returns null if the script is not deployed as a web app.
+ * @returns {string|null} The detected URL or null
+ */
+function detectWebAppUrl() {
+  try {
+    var url = ScriptApp.getService().getUrl();
+    if (url && url.indexOf('script.google.com') !== -1) {
+      return url;
+    }
+  } catch (e) {
+    // Not deployed as web app, or insufficient permissions
+  }
+  return null;
 }
 
 /**
@@ -208,7 +239,7 @@ function registerWithHub() {
 
   var webhookUrl = getWebhookUrl();
   if (!webhookUrl) {
-    return { success: false, error: 'Webhook URL not set. Deploy as web app first.' };
+    return { success: false, error: 'Webhook URL not set in Config sheet. Use Settings > Set Webhook URL.' };
   }
 
   var instanceName = getInstanceName();
