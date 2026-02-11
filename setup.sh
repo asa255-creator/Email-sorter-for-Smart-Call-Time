@@ -60,6 +60,7 @@ CONFIG_FILES=(
     "central-hub/.clasp.json"
     "src/.webapp_url"
     "central-hub/.webapp_url"
+    "central-hub/.hub_url"
 )
 
 # Backup config files to /tmp before reset
@@ -607,10 +608,11 @@ commit_hub_url() {
 
             # Push so user instances get it on next pull/setup
             local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-            if git push origin "$current_branch" 2>/dev/null; then
+            if GIT_TERMINAL_PROMPT=0 git push origin "$current_branch" 2>/dev/null; then
                 print_success "Hub URL pushed - user instances will auto-detect it"
             else
-                print_warning "Could not push Hub URL (push manually or users can enter it)"
+                print_warning "Could not push Hub URL automatically."
+                print_info "Run manually: git push origin $current_branch"
             fi
         fi
     else
@@ -712,7 +714,7 @@ get_webapp_url() {
         # Last resort: try plain text parsing of clasp deployments
         local deploy_output
         deploy_output=$(clasp deployments 2>/dev/null || echo "")
-        deploy_id=$(echo "$deploy_output" | grep -oP '(?<=- )AKfycb[a-zA-Z0-9_-]+' | head -1)
+        deploy_id=$(echo "$deploy_output" | grep -o 'AKfycb[a-zA-Z0-9_-]*' | head -1)
         if [ -n "$deploy_id" ]; then
             echo "https://script.google.com/macros/s/$deploy_id/exec"
         else
@@ -832,21 +834,24 @@ prompt_hub_registration() {
     read -p "Register/update with Hub? (y/n): " DO_REG
 
     if [ "$DO_REG" = "y" ] || [ "$DO_REG" = "Y" ]; then
-        echo ""
-        echo "Hub URL options:"
-        echo -e "  Detected: ${CYAN}$detected_hub_url${NC}"
-        echo ""
-        read -p "Use this Hub URL? (y/n): " USE_DETECTED
-
         local hub_url
-        if [ "$USE_DETECTED" = "y" ] || [ "$USE_DETECTED" = "Y" ]; then
-            hub_url="$detected_hub_url"
+        if [ -n "$detected_hub_url" ]; then
+            echo ""
+            echo "Hub URL options:"
+            echo -e "  Detected: ${CYAN}$detected_hub_url${NC}"
+            echo ""
+            read -p "Use this Hub URL? (y/n): " USE_DETECTED
+
+            if [ "$USE_DETECTED" = "y" ] || [ "$USE_DETECTED" = "Y" ]; then
+                hub_url="$detected_hub_url"
+            else
+                echo ""
+                read -p "Enter Hub URL: " hub_url
+            fi
         else
             echo ""
-            read -p "Enter Hub URL: " hub_url
-            if [ -z "$hub_url" ]; then
-                hub_url="$detected_hub_url"
-            fi
+            print_info "No Hub URL detected in central-hub/.hub_url"
+            read -p "Enter Hub URL (or press Enter to skip): " hub_url
         fi
 
         # Validate URL format before attempting registration
