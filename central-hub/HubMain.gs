@@ -29,15 +29,34 @@ function onMessage(event) {
     logHub('MESSAGE_RECEIVED', `From: ${sender}, Message: ${message.substring(0, 100)}...`);
 
     const parsed = parseMessage(message);
+    const msgType = getMessageType(parsed.labels);
 
+    // Handle CONFIRMED messages - user confirmed a test, delete tracked messages
+    if (parsed.instanceName && msgType === 'CONFIRMED') {
+      const confirmResult = handleConfirmedMessage(parsed, messageName);
+
+      if (confirmResult.success) {
+        return { text: `${parsed.instanceName}: Confirmed. ${confirmResult.deleted || 0} messages cleaned up.` };
+      }
+
+      return { text: `Confirm handling failed: ${confirmResult.error}` };
+    }
+
+    // Handle test chat messages (both legacy TEST_CHAT_CONNECTION and new SHEETS_CHAT_TEST)
     if (parsed.instanceName && isTestChatLabels(parsed.labels)) {
-      const testResult = handleTestChatMessage(parsed);
+      const testResult = handleTestChatMessage(parsed, messageName);
 
       if (testResult.success) {
-        return { text: `Test chat connection successful for ${parsed.instanceName}.` };
+        return { text: `Test chat received for ${parsed.instanceName}. Webhook sent.` };
       }
 
       return { text: `Test chat connection failed: ${testResult.error}` };
+    }
+
+    // Handle system/status messages (QUEUE_STARTED, QUEUE_COMPLETE) - just log them
+    if (parsed.instanceName && msgType && isSystemMessage(msgType)) {
+      logHub('STATUS_MESSAGE', `${parsed.instanceName}: ${msgType}`);
+      return { text: `Status received: ${parsed.instanceName} ${msgType}` };
     }
 
     // Parse the AI response to extract labels and target user

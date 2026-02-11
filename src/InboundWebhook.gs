@@ -46,6 +46,18 @@ function doPost(e) {
       return handleTestChatSuccess(data);
     }
 
+    if (data.action === 'test_sheets_chat_start') {
+      return handleTestSheetsChatStart(data);
+    }
+
+    if (data.action === 'test_sheets_chat_confirm') {
+      return handleTestSheetsChatConfirm(data);
+    }
+
+    if (data.action === 'test_sheets_chat_complete') {
+      return handleTestSheetsChatComplete(data);
+    }
+
     if (data.action === 'update_labels') {
       return handleLabelUpdate(data);
     }

@@ -26,6 +26,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Test Webhook Ping (Hub → User → Hub)', 'testWebhookPingFromHub')
     .addItem('Test Chat Connection (Hub → User → Chat → Hub)', 'testChatConnectionFromHub')
+    .addItem('Test Sheets Chat Round-Trip (Full test with message cleanup)', 'testSheetsChatFromHub')
     .addToUi();
 }
 

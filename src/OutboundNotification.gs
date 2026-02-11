@@ -147,6 +147,38 @@ function postToChat(webhookUrl, message) {
 }
 
 // ============================================================================
+// CONSISTENT CHAT MESSAGE FORMAT
+// ============================================================================
+
+/**
+ * Builds a chat message using the consistent format.
+ *
+ * FORMAT: @{instanceName}:[{conversationId}] {MESSAGE_TYPE}
+ *
+ * - instanceName: identifies which user sheet sent the message
+ * - conversationId: groups related messages for cleanup (emailId or UUID)
+ * - MESSAGE_TYPE: identifies what action to take
+ *
+ * This format allows:
+ * - Hub to route to the correct user via @instanceName
+ * - Hub to group and delete all messages in a conversation via [conversationId]
+ * - Google Workspace Flow to filter on MESSAGE_TYPE
+ *
+ * @param {string} instanceName - User instance name
+ * @param {string} conversationId - Conversation/tracking ID (emailId or UUID)
+ * @param {string} messageType - Message type (e.g. EMAIL_READY, CONFIRMED)
+ * @param {string} [body] - Optional message body after the header line
+ * @returns {string} Formatted chat message
+ */
+function buildChatMessage(instanceName, conversationId, messageType, body) {
+  var header = '@' + instanceName + ':[' + conversationId + '] ' + messageType;
+  if (body) {
+    return header + '\n' + body;
+  }
+  return header;
+}
+
+// ============================================================================
 // NOTIFICATION TYPES
 // ============================================================================
 
@@ -172,9 +204,8 @@ function notifyOldEmailReady() {
 
   const labels = getLabelsForNotification();
 
-  // Build complete message with all data Flow needs
-  const message = `[${instanceName}] OLD_EMAIL_READY
-
+  // Build complete message with all data Flow needs, using consistent format
+  const body = `
 ===== AVAILABLE LABELS =====
 ${labels}
 
@@ -187,10 +218,11 @@ Date: ${emailData.date}
 ${emailData.context}
 
 ===== INSTRUCTIONS =====
-Respond with comma-separated label names that fit this email.
+Respond with: @${instanceName}:[${emailData.emailId}] Label1, Label2
 Use ONLY labels from AVAILABLE LABELS above.
-If nothing fits, respond with: NONE`;
+If nothing fits, respond with: @${instanceName}:[${emailData.emailId}] NONE`;
 
+  const message = buildChatMessage(instanceName, emailData.emailId, 'EMAIL_READY', body);
   postToChat(webhookUrl, message);
 }
 
@@ -203,7 +235,8 @@ function notifyQueueStarted(count) {
   if (!webhookUrl) return;
 
   const instanceName = getInstanceName();
-  const message = buildSimpleMessage(instanceName, 'QUEUE_STARTED', { count });
+  const batchId = Utilities.getUuid();
+  const message = buildChatMessage(instanceName, batchId, 'QUEUE_STARTED', 'Count: ' + count);
   postToChat(webhookUrl, message);
 }
 
@@ -215,6 +248,7 @@ function notifyQueueComplete() {
   if (!webhookUrl) return;
 
   const instanceName = getInstanceName();
-  const message = buildSimpleMessage(instanceName, 'QUEUE_COMPLETE', {});
+  const batchId = Utilities.getUuid();
+  const message = buildChatMessage(instanceName, batchId, 'QUEUE_COMPLETE');
   postToChat(webhookUrl, message);
 }

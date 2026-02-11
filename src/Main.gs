@@ -42,7 +42,8 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(ui.createMenu('Testing')
       .addItem('Test Webhook Ping (User → Hub → User)', 'testWebhookPingFromUser')
-      .addItem('Test Chat Connection (User → Chat → Hub → User)', 'testChatConnectionFromUser'))
+      .addItem('Test Chat Connection (User → Chat → Hub → User)', 'testChatConnectionFromUser')
+      .addItem('Test Sheets Chat Round-Trip (Full test with cleanup)', 'testSheetsChatFromUser'))
     .addToUi();
 }
 
