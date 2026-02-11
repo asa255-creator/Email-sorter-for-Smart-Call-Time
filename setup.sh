@@ -108,9 +108,11 @@ pull_latest() {
     if [ -d ".git" ]; then
         # Fetch latest from remote
         if ! git fetch origin 2>/dev/null; then
-            print_warning "Could not fetch from remote (network issue?)"
+            print_error "Could not fetch latest code from GitHub (network/auth issue)."
             echo ""
-            return
+            echo "Setup aborted to prevent running stale local code."
+            echo "Fix git connectivity, then run ./setup.sh again."
+            return 1
         fi
 
         # Try to get current branch
@@ -125,31 +127,36 @@ pull_latest() {
             print_info "Branch: $CURRENT_BRANCH (no remote tracking)"
         elif [ "$LOCAL" != "$REMOTE" ]; then
             print_warning "Updates available on $CURRENT_BRANCH"
-            read -p "Update to latest code? (y/n): " PULL_CHOICE
-            if [ "$PULL_CHOICE" = "y" ] || [ "$PULL_CHOICE" = "Y" ]; then
-                # Backup config files
-                BACKUP_DIR=$(backup_config_files)
-                print_info "Config files backed up"
 
-                # Hard reset to remote (always succeeds, no merge conflicts)
-                if git reset --hard "origin/$CURRENT_BRANCH" 2>/dev/null; then
-                    print_success "Updated to latest"
+            # Backup config files
+            BACKUP_DIR=$(backup_config_files)
+            print_info "Config files backed up"
 
-                    # Restore config files
-                    restore_config_files "$BACKUP_DIR"
-                    print_info "Config files restored"
-                else
-                    print_warning "Reset failed - continuing with local code"
-                    restore_config_files "$BACKUP_DIR"
-                fi
+            # Hard reset to remote (always succeeds, no merge conflicts)
+            if git reset --hard "origin/$CURRENT_BRANCH" 2>/dev/null; then
+                print_success "Updated to latest"
+
+                # Restore config files
+                restore_config_files "$BACKUP_DIR"
+                print_info "Config files restored"
+            else
+                print_error "Failed to update to latest GitHub code."
+                restore_config_files "$BACKUP_DIR"
+                echo ""
+                echo "Setup aborted to prevent running stale local code."
+                return 1
             fi
         else
             print_success "Code is up to date on $CURRENT_BRANCH"
         fi
     else
-        print_warning "Not a git repo - skipping update check"
+        print_error "Not a git repository. Cannot verify latest GitHub code."
+        echo ""
+        echo "Setup aborted. Re-clone the repository from GitHub and try again."
+        return 1
     fi
     echo ""
+    return 0
 }
 
 # ============================================================================
@@ -949,7 +956,9 @@ main() {
     print_header
 
     # Always check for updates first
-    pull_latest
+    if ! pull_latest; then
+        exit 1
+    fi
 
     # Check dependencies
     check_dependencies
