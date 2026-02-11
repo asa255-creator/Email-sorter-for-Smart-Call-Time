@@ -98,9 +98,11 @@ pull_latest() {
     if [ -d ".git" ]; then
         # Fetch latest from remote
         if ! git fetch origin 2>/dev/null; then
-            print_warning "Could not fetch from remote (network issue?)"
+            print_error "Could not fetch latest code from GitHub (network/auth issue)."
             echo ""
-            return
+            echo "Setup aborted to prevent running stale local code."
+            echo "Fix git connectivity, then run ./setup.sh again."
+            return 1
         fi
 
         # Try to get current branch
@@ -115,31 +117,36 @@ pull_latest() {
             print_info "Branch: $CURRENT_BRANCH (no remote tracking)"
         elif [ "$LOCAL" != "$REMOTE" ]; then
             print_warning "Updates available on $CURRENT_BRANCH"
-            read -p "Update to latest code? (y/n): " PULL_CHOICE
-            if [ "$PULL_CHOICE" = "y" ] || [ "$PULL_CHOICE" = "Y" ]; then
-                # Backup config files
-                BACKUP_DIR=$(backup_config_files)
-                print_info "Config files backed up"
 
-                # Hard reset to remote (always succeeds, no merge conflicts)
-                if git reset --hard "origin/$CURRENT_BRANCH" 2>/dev/null; then
-                    print_success "Updated to latest"
+            # Backup config files
+            BACKUP_DIR=$(backup_config_files)
+            print_info "Config files backed up"
 
-                    # Restore config files
-                    restore_config_files "$BACKUP_DIR"
-                    print_info "Config files restored"
-                else
-                    print_warning "Reset failed - continuing with local code"
-                    restore_config_files "$BACKUP_DIR"
-                fi
+            # Hard reset to remote (always succeeds, no merge conflicts)
+            if git reset --hard "origin/$CURRENT_BRANCH" 2>/dev/null; then
+                print_success "Updated to latest"
+
+                # Restore config files
+                restore_config_files "$BACKUP_DIR"
+                print_info "Config files restored"
+            else
+                print_error "Failed to update to latest GitHub code."
+                restore_config_files "$BACKUP_DIR"
+                echo ""
+                echo "Setup aborted to prevent running stale local code."
+                return 1
             fi
         else
             print_success "Code is up to date on $CURRENT_BRANCH"
         fi
     else
-        print_warning "Not a git repo - skipping update check"
+        print_error "Not a git repository. Cannot verify latest GitHub code."
+        echo ""
+        echo "Setup aborted. Re-clone the repository from GitHub and try again."
+        return 1
     fi
     echo ""
+    return 0
 }
 
 # ============================================================================
@@ -467,7 +474,7 @@ webapps = []
 
 for deployment in deployments:
     entry_points = deployment.get("entryPoints", [])
-    if any(entry.get("entryPointType") == "WEB_APP" for entry in entry_points):
+    if any(entry.get("entryPointType") in ("WEB_APP", "WEBAPP") for entry in entry_points):
         webapps.append(deployment)
 
 def sort_key(item):
@@ -485,6 +492,40 @@ PY
 # Get the most recent web app deployment ID (ignores library deployments).
 get_webapp_deployment_id() {
     get_webapp_deployment_ids | head -1
+}
+
+# Get the most recent deployment ID of any type (fallback when entry point metadata is missing).
+get_latest_deployment_id_any_type() {
+    local deploy_json
+    deploy_json=$(clasp deployments --json 2>/dev/null || echo "")
+
+    if [ -z "$deploy_json" ]; then
+        return 0
+    fi
+
+    echo "$deploy_json" | python - <<'PY'
+import json, sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+
+deployments = data.get("deployments", [])
+deployments.sort(key=lambda item: item.get("updateTime") or "", reverse=True)
+
+for deployment in deployments:
+    deployment_id = deployment.get("deploymentId")
+    if deployment_id:
+        print(deployment_id)
+        break
+PY
+}
+
+# Extract deployment ID from clasp deploy output (e.g., "Deployed AKfy... @6").
+extract_deploy_id_from_output() {
+    local output="$1"
+    echo "$output" | grep -o 'AKfy[a-zA-Z0-9_-]*' | head -1
 }
 
 # Keep only the specified web app deployment active.
@@ -517,17 +558,46 @@ deploy_webapp() {
 
     if [ -n "$DEPLOY_ID" ]; then
         print_info "Found existing web app deployment - updating in place..."
-        if ! clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>/dev/null; then
+        local deploy_output
+        deploy_output=$(clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>&1)
+        local deploy_exit=$?
+
+        if [ $deploy_exit -ne 0 ]; then
             print_warning "Web app update failed; keeping existing deployment without creating a new one."
+        fi
+
+        # Some clasp versions return a new deployment ID in output even on update.
+        local output_deploy_id
+        output_deploy_id=$(extract_deploy_id_from_output "$deploy_output")
+        if [ -n "$output_deploy_id" ]; then
+            DEPLOY_ID="$output_deploy_id"
         fi
     else
         print_info "No web app deployment found - creating one..."
-        clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)"
-        DEPLOY_ID=$(get_webapp_deployment_id)
+        local deploy_output
+        deploy_output=$(clasp deploy --description "Initial web app deploy $(date +%Y-%m-%d)" 2>&1)
+        local deploy_exit=$?
+
+        if [ $deploy_exit -ne 0 ]; then
+            print_error "Web app deployment failed"
+            echo "$deploy_output"
+            exit 1
+        fi
+
+        DEPLOY_ID=$(extract_deploy_id_from_output "$deploy_output")
     fi
 
     if [ -n "$DEPLOY_ID" ]; then
         remove_extra_webapp_deployments "$DEPLOY_ID"
+    fi
+
+    # Fallback lookup for clasp variants that omit WEB_APP entry point metadata.
+    if [ -z "$DEPLOY_ID" ]; then
+        DEPLOY_ID=$(get_webapp_deployment_id)
+    fi
+
+    if [ -z "$DEPLOY_ID" ]; then
+        DEPLOY_ID=$(get_latest_deployment_id_any_type)
     fi
 
     # Get deployment URL (web app only)
@@ -939,7 +1009,9 @@ main() {
     print_header
 
     # Always check for updates first
-    pull_latest
+    if ! pull_latest; then
+        exit 1
+    fi
 
     # Check dependencies
     check_dependencies

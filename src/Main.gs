@@ -37,7 +37,12 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(ui.createMenu('Settings')
       .addItem('Show Configuration', 'showConfig')
+      .addItem('Register / Re-register with Hub', 'registerWithHubFromMenu')
       .addItem('Refresh All', 'refreshAll'))
+    .addSeparator()
+    .addSubMenu(ui.createMenu('Testing')
+      .addItem('Test Webhook Ping (User → Hub → User)', 'testWebhookPingFromUser')
+      .addItem('Test Chat Connection (User → Chat → Hub → User)', 'testChatConnectionFromUser'))
     .addToUi();
 }
 
@@ -100,6 +105,9 @@ function emailSorterSetup() {
   // Prompt for instance name if not set
   promptForInstanceName(ui);
 
+  // Offer Hub registration during setup
+  promptForHubRegistration(ui);
+
   // Navigate to Instructions
   const instructionsSheet = ss.getSheetByName('Instructions');
   if (instructionsSheet) {
@@ -156,6 +164,83 @@ function refreshAll() {
     ui.ButtonSet.OK);
 }
 
+/**
+ * Prompts the user to register/re-register with the Hub during setup.
+ * @param {Ui} ui - The SpreadsheetApp UI object
+ */
+function promptForHubRegistration(ui) {
+  const currentHubUrl = getHubUrl();
+
+  const response = ui.alert(
+    'Hub Registration',
+    'Would you like to register this sheet with the Central Hub now?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (response !== ui.Button.YES) {
+    return;
+  }
+
+  const hubUrl = promptForHubUrl(ui, currentHubUrl);
+  if (!hubUrl) {
+    return;
+  }
+
+  const result = registerWithHub(hubUrl);
+  if (result.success) {
+    ui.alert('Success', 'This sheet is now registered with the Hub.', ui.ButtonSet.OK);
+  } else {
+    ui.alert('Registration Failed', result.error || 'Unknown error', ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Menu action for registering/re-registering with the Hub.
+ */
+function registerWithHubFromMenu() {
+  const ui = SpreadsheetApp.getUi();
+  const currentHubUrl = getHubUrl();
+  const hubUrl = promptForHubUrl(ui, currentHubUrl);
+
+  if (!hubUrl) {
+    return;
+  }
+
+  const result = registerWithHub(hubUrl);
+
+  if (result.success) {
+    ui.alert('Success', 'Hub registration completed successfully.', ui.ButtonSet.OK);
+  } else {
+    ui.alert('Failed', `Could not register with Hub: ${result.error || 'Unknown error'}`, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Prompts for Hub URL and returns it, prefilling with existing value if available.
+ * @param {Ui} ui - The SpreadsheetApp UI object
+ * @param {string|null} currentHubUrl - Existing Hub URL
+ * @returns {string|null} Hub URL or null if cancelled/empty
+ */
+function promptForHubUrl(ui, currentHubUrl) {
+  const message = currentHubUrl
+    ? `Current Hub URL:\n${currentHubUrl}\n\nEnter Hub web app URL (or click Cancel):`
+    : 'Enter the Central Hub web app URL:';
+
+  const response = ui.prompt('Hub URL', message, ui.ButtonSet.OK_CANCEL);
+
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    return null;
+  }
+
+  const entered = response.getResponseText().trim();
+  if (!entered) {
+    ui.alert('No URL Entered', 'Hub registration skipped.', ui.ButtonSet.OK);
+    return null;
+  }
+
+  return entered;
+}
+
 // ============================================================================
 // AUTHORIZATION
 // ============================================================================
@@ -198,4 +283,3 @@ function showConfig() {
 
   ui.alert('Configuration', config, ui.ButtonSet.OK);
 }
-
