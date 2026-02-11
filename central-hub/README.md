@@ -5,10 +5,12 @@ The Central Hub manages multiple user instances of the Email Sorter. It acts as 
 ## Architecture
 
 ```
-User Sheet  ──webhook──>  Central Hub  ──chat──>  AI (in Chat space)
-                               │
-                               │
-AI Response <──chat──  Central Hub  ──webhook──>  User Sheet
+User Sheet  ──chat msg──>  Chat Space  ──event──>  Central Hub
+                                                        │
+                                                  (routes labels)
+                                                        │
+                                                        v
+                                               User Sheet (webhook)
 ```
 
 ## Deployment
@@ -20,36 +22,64 @@ AI Response <──chat──  Central Hub  ──webhook──>  User Sheet
 3. Delete default Code.gs
 4. Create these files and copy the code:
    - HubMain.gs
+   - HubConfig.gs
    - UserRegistry.gs
    - MessageRouter.gs
    - PendingRequests.gs
    - ChatManager.gs
    - HubSetup.gs
+   - HubTest.gs
+   - TestManager.gs
 5. Replace appsscript.json content
 
 ### 2. Deploy as Web App
 
-1. Deploy > New deployment > Web app
-2. Execute as: Me
-3. Who has access: Anyone
-4. Copy the web app URL - this is the `HUB_URL` for users
+1. In Apps Script editor: **Deploy > New deployment**
+2. Select type: **Web app**
+3. Execute as: **Me**
+4. Who has access: **Anyone**
+5. Click **Deploy** and copy the Web App URL
+6. Save this URL - you will paste it into Google Cloud Console (step 3 below)
 
-### 3. Deploy as Chat App (Optional)
+### 3. Configure as Chat App in Google Cloud Console
 
-If you want to receive AI messages directly:
+This is where you tell Google Chat to send messages to your Hub.
 
-1. Deploy > New deployment > Chat app
-2. Configure in Google Cloud Console:
-   - Enable Chat API
-   - Configure Chat app settings
-3. Add the app to your Chat space
+1. Go to [Google Cloud Console](https://console.cloud.google.com)
+2. Select your project (or create one)
+3. Navigate to: **APIs & Services > Enabled APIs & services**
+4. Search for **Google Chat API** and enable it
+5. Click **Google Chat API** then go to the **Configuration** tab
+6. Fill in the Chat App settings:
+   - **App name**: Smart Call Time Hub
+   - **Avatar URL**: (optional)
+   - **Description**: Email sorter central hub
+   - **Functionality**: Check "Receive 1:1 messages" and "Join spaces and group conversations"
+   - **Connection settings**: Select **HTTP endpoint URL**
+   - **HTTP endpoint URL**: Paste your Web App URL from step 2
+   - **Authentication Audience**: Select **HTTP endpoint URL**
+   - **Visibility**: Make available to specific people or your domain
+7. Click **Save**
 
-### 4. Configure Chat Webhook
+After saving, the Chat App will appear in Google Chat. Add it to your Chat space and it will start receiving messages.
 
-1. In your Chat space, create a webhook (Space settings > Webhooks)
-2. Copy the webhook URL
-3. In the Hub spreadsheet: Hub Admin > Configure Chat Webhook
-4. Paste the webhook URL
+### 4. Initial Setup (in the Hub Spreadsheet)
+
+1. Reload the spreadsheet to get the Hub Admin menu
+2. **Hub Admin > Initial Setup** - creates required sheets
+3. **Hub Admin > Configure Chat Space** - enter the space ID
+   - To find it: open the Chat space in a browser, the URL contains the space ID
+   - Format: `spaces/XXXXXXXXX`
+
+### 5. Configure Chat Webhook (for user-side outbound)
+
+Users need the Chat space webhook URL to post messages:
+
+1. In Google Chat, open the space
+2. Click the space name > **Apps & integrations** (or **Manage webhooks**)
+3. Create a new webhook, copy the URL
+4. In the Hub spreadsheet: **Hub Admin > Configure Chat Webhook**
+5. Share this webhook URL with user instances (they store it as `chat_webhook_url`)
 
 ## Sheets Created
 
@@ -60,49 +90,48 @@ If you want to receive AI messages directly:
 
 ## User Registration
 
-Users register automatically when running `./setup.sh` if `HUB_URL` is set.
+Users register by posting a Chat message:
 
-Manual registration:
-```bash
-curl -X POST "HUB_URL" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "action": "register",
-    "email": "user@example.com",
-    "instanceName": "myinstance",
-    "webhookUrl": "https://script.google.com/macros/s/.../exec"
-  }'
 ```
+@instanceName:[register] REGISTER
+email=user@example.com
+webhook=https://script.google.com/macros/s/.../exec
+sheetId=SPREADSHEET_ID
+```
+
+The Hub processes this via `onMessage()`, registers the user, and sends a confirmation webhook back.
+
+## Web App Endpoints
+
+### GET /
+Returns hub status (version, user count, chat space configured).
+
+### POST /
+Receives two types of requests:
+
+| Type | Description |
+|------|-------------|
+| Google Chat events | Messages from the Chat space (type=MESSAGE, ADDED_TO_SPACE, etc.) |
+| `ping` action | Health check - returns `{ success: true, status: "healthy" }` |
+| `status` action | Returns registered user count and config status |
 
 ## Message Flow
 
-1. User's sheet sends email to Hub (via webhook)
-2. Hub forwards to Chat space for AI
-3. AI responds with labels in Chat
-4. Hub receives response (via Chat app or monitors space)
-5. Hub routes labels to user's webhook
-6. User's sheet applies labels to email
-
-## API Endpoints
-
-### POST /
-
-| Action | Description | Payload |
-|--------|-------------|---------|
-| `register` | Register user instance | `{email, instanceName, webhookUrl}` |
-| `unregister` | Unregister user | `{email}` or `{instanceName}` |
-| `ping` | Health check | `{}` |
-| `route_labels` | Route labels to user | `{instanceName, labels, emailId?}` |
-
-### GET /
-
-Returns hub status and registered user count.
+1. User's sheet posts email to Chat space (via webhook URL)
+2. Google Chat sends the message event to the Hub's web app endpoint
+3. Hub's `onMessage()` processes the message
+4. AI responds with labels in Chat
+5. Hub receives AI response (via same `onMessage()`)
+6. Hub routes labels to user's webhook
+7. User's sheet applies labels to email
 
 ## Testing
 
-From the Hub spreadsheet:
-- Hub Admin > Test Chat Connection
-- Hub Admin > Test Route to User
+From the Hub spreadsheet menu:
+- **Hub Admin > View Recent Chat Messages** - see what's in the Chat space
+- **Hub Admin > Test Webhook Ping** - ping a user's webhook
+- **Hub Admin > Test Chat Connection** - full round-trip test
+- **Hub Admin > Test Sheets Chat Round-Trip** - full test with message cleanup
 
 ## Separate Deployment
 
@@ -112,5 +141,5 @@ The Hub is deployed separately from user instances:
 cd central-hub
 clasp create --type sheets --title "Smart Call Time Hub"
 clasp push
-clasp deploy
+clasp deploy --type web
 ```

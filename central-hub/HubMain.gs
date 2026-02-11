@@ -1,18 +1,117 @@
 /**
  * Central Hub - Main Entry Points
  *
- * The Hub is deployed ONLY as a Google Chat App.
- * It does NOT have a web app (no doGet/doPost).
+ * The Hub is deployed as BOTH a Web App and a Google Chat App.
  *
- * ALL input to the Hub comes through Google Chat messages:
- * - Registration requests from user instances
- * - AI label responses routed to user webhooks
- * - Confirm-complete notifications from user instances
- * - Test messages
+ * Web App (doPost/doGet):
+ * - Receives Google Chat events when configured as an HTTP endpoint
+ * - Handles direct webhook calls (ping, status)
+ *
+ * Chat App (onMessage, onAddedToSpace, etc.):
+ * - Receives Google Chat events when configured as an Apps Script project
+ *
+ * Both entry points route to the same message handling logic.
  *
  * The Hub reads/writes webhook URLs from Google Sheets (Registry).
  * The Hub sends outbound webhooks to user instances via UrlFetchApp.
  */
+
+// ============================================================================
+// WEB APP ENTRY POINTS
+// ============================================================================
+
+/**
+ * Handles GET requests (status check).
+ *
+ * @param {Object} e - Event object
+ * @returns {TextOutput} JSON response
+ */
+function doGet(e) {
+  var config = getAllHubConfig();
+  var users = [];
+  try { users = getAllActiveUsers(); } catch (err) { /* registry may not exist yet */ }
+
+  return ContentService.createTextOutput(JSON.stringify({
+    status: 'Smart Call Time Hub Active',
+    version: config.hub_version || '1.0.0',
+    registeredUsers: users.length,
+    chatSpaceConfigured: !!config.chat_space_id,
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      'GET /': 'Status check (this response)',
+      'POST /': 'Receive Google Chat events or direct webhook calls'
+    }
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Handles POST requests.
+ *
+ * Two modes:
+ * 1. Google Chat HTTP endpoint events (have event.type, event.message, etc.)
+ * 2. Direct webhook calls (have action field)
+ *
+ * @param {Object} e - Event object with postData
+ * @returns {TextOutput} JSON response
+ */
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+
+    // --- Google Chat HTTP endpoint events ---
+    // When the Hub is configured as an HTTP endpoint in Cloud Console,
+    // Google Chat sends events here instead of calling onMessage() directly.
+    if (data.type === 'MESSAGE' && data.message) {
+      var chatResult = onMessage(data);
+      return hubJsonResponse(chatResult);
+    }
+
+    if (data.type === 'ADDED_TO_SPACE' && data.space) {
+      var addResult = onAddedToSpace(data);
+      return hubJsonResponse(addResult);
+    }
+
+    if (data.type === 'REMOVED_FROM_SPACE') {
+      onRemovedFromSpace(data);
+      return hubJsonResponse({ text: 'Acknowledged' });
+    }
+
+    // --- Direct webhook calls ---
+    if (data.action === 'ping') {
+      return hubJsonResponse({ success: true, status: 'healthy', timestamp: new Date().toISOString() });
+    }
+
+    if (data.action === 'status') {
+      var users = [];
+      try { users = getAllActiveUsers(); } catch (err) {}
+      return hubJsonResponse({
+        success: true,
+        registeredUsers: users.length,
+        chatSpaceConfigured: !!getHubConfig('chat_space_id'),
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Unknown request
+    logHub('DOPOST_UNKNOWN', 'Unknown request: ' + JSON.stringify(data).substring(0, 200));
+    return hubJsonResponse({ success: false, error: 'Unknown request type. Expected Chat event or action.' });
+
+  } catch (error) {
+    logHub('DOPOST_ERROR', error.message);
+    return hubJsonResponse({ success: false, error: error.message });
+  }
+}
+
+/**
+ * Creates a JSON response for web app endpoints.
+ *
+ * @param {Object} data - Response data
+ * @returns {TextOutput} JSON text output
+ */
+function hubJsonResponse(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
 
 // ============================================================================
 // CHAT APP ENTRY POINTS
