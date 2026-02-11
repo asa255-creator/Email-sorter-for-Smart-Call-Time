@@ -712,7 +712,7 @@ get_webapp_url() {
         # Last resort: try plain text parsing of clasp deployments
         local deploy_output
         deploy_output=$(clasp deployments 2>/dev/null || echo "")
-        deploy_id=$(echo "$deploy_output" | grep -oP '(?<=- )AKfycb[a-zA-Z0-9_-]+' | head -1)
+        deploy_id=$(echo "$deploy_output" | grep -o 'AKfycb[a-zA-Z0-9_-]*' | head -1)
         if [ -n "$deploy_id" ]; then
             echo "https://script.google.com/macros/s/$deploy_id/exec"
         else
