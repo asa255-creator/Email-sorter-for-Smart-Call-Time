@@ -6,7 +6,7 @@
 # Handles both User Instance and Central Hub deployments
 #
 # Architecture:
-#   - Hub: Chat App ONLY (no web app). Receives all input via Google Chat.
+#   - Hub: Web App + Chat App. Receives Chat events via HTTP endpoint.
 #   - User: Web App (doGet/doPost). Receives webhooks FROM Hub.
 #   - Communication TO Hub: Via Google Chat messages (chat_webhook_url)
 #   - Communication TO User: Via webhooks (webhook_url in Hub's Registry sheet)
@@ -204,7 +204,7 @@ select_project_type() {
     echo -e "${YELLOW}What are you setting up?${NC}"
     echo ""
     echo "  1) User Instance  - Individual email sorter sheet"
-    echo "  2) Central Hub    - Chat App for routing (admin only, NO web app)"
+    echo "  2) Central Hub    - Web App + Chat App for routing (admin only)"
     echo ""
     read -p "Enter choice (1 or 2): " TYPE_CHOICE
 
@@ -278,20 +278,8 @@ create_new_project() {
     # Push code
     push_code
 
-    if [ "$PROJECT_TYPE" = "hub" ]; then
-        # Hub: NO web app deployment. It's a Chat App only.
-        echo ""
-        echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-        echo -e "${GREEN}  HUB PROJECT CREATED (Chat App Only - No Web App)${NC}"
-        echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-        echo ""
-        echo "  The Hub does NOT need a web app deployment."
-        echo "  It receives ALL input through Google Chat (onMessage)."
-        echo ""
-    else
-        # User: Deploy as web app (Hub sends webhooks here)
-        deploy_webapp
-    fi
+    # Both Hub and User need web app deployments
+    deploy_webapp
 
     # Pre-authorize the script
     echo ""
@@ -345,16 +333,11 @@ update_existing_project() {
     # Push code
     push_code
 
-    # For User instances, ask about web app deployment
-    if [ "$PROJECT_TYPE" = "user" ]; then
-        echo ""
-        read -p "Deploy/update web app? (y/n): " DEPLOY_CHOICE
-        if [ "$DEPLOY_CHOICE" = "y" ] || [ "$DEPLOY_CHOICE" = "Y" ]; then
-            deploy_webapp
-        fi
-    else
-        echo ""
-        print_info "Hub is a Chat App only - no web app deployment needed."
+    # Both Hub and User need web app deployments
+    echo ""
+    read -p "Deploy/update web app? (y/n): " DEPLOY_CHOICE
+    if [ "$DEPLOY_CHOICE" = "y" ] || [ "$DEPLOY_CHOICE" = "Y" ]; then
+        deploy_webapp
     fi
 
     show_completion
@@ -505,7 +488,11 @@ remove_extra_webapp_deployments() {
 }
 
 deploy_webapp() {
-    print_info "Deploying User instance as web app..."
+    if [ "$PROJECT_TYPE" = "hub" ]; then
+        print_info "Deploying Hub as web app..."
+    else
+        print_info "Deploying User instance as web app..."
+    fi
 
     cd "$SRC_DIR"
 
@@ -564,14 +551,25 @@ deploy_webapp() {
 
         echo ""
         echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-        echo -e "${GREEN}  USER WEB APP DEPLOYED${NC}"
+        if [ "$PROJECT_TYPE" = "hub" ]; then
+            echo -e "${GREEN}  HUB WEB APP DEPLOYED${NC}"
+        else
+            echo -e "${GREEN}  USER WEB APP DEPLOYED${NC}"
+        fi
         echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
         echo ""
-        echo -e "Webhook URL (Hub will send webhooks here):"
+        echo -e "Web App URL:"
         echo -e "${YELLOW}$WEBAPP_URL${NC}"
         echo ""
-        echo "This URL will be sent to the Hub during registration."
-        echo "Registration happens via Google Chat (not HTTP to Hub)."
+        if [ "$PROJECT_TYPE" = "hub" ]; then
+            echo "Paste this URL into Google Cloud Console:"
+            echo "  Chat API > Configuration > Connection settings > HTTP endpoint URL"
+            echo ""
+            echo "See central-hub/README.md for full setup instructions."
+        else
+            echo "This URL will be sent to the Hub during registration."
+            echo "Registration happens via Google Chat (not HTTP to Hub)."
+        fi
         echo ""
     else
         print_warning "Could not determine deployment URL"
@@ -673,14 +671,16 @@ show_completion() {
         echo ""
         echo "  1. Open the Hub spreadsheet and REFRESH the page"
         echo "  2. Click: Hub Admin > Initial Setup"
-        echo "  3. Set up as Chat App in Google Cloud Console"
-        echo "  4. Add the Chat App to your Chat space"
-        echo "  5. Click: Hub Admin > Configure Chat Webhook"
-        echo "  6. Click: Hub Admin > Configure Chat Space"
+        echo "  3. In Google Cloud Console:"
+        echo "     a. Enable the Google Chat API"
+        echo "     b. Go to Chat API > Configuration tab"
+        echo "     c. Set Connection settings to 'HTTP endpoint URL'"
+        echo "     d. Paste the Web App URL as the endpoint"
+        echo "     e. Save and add the Chat App to your space"
+        echo "  4. Click: Hub Admin > Configure Chat Webhook"
+        echo "  5. Click: Hub Admin > Configure Chat Space"
         echo ""
-        echo -e "${YELLOW}  NOTE: The Hub has NO web app deployment.${NC}"
-        echo "  All input comes through Google Chat messages."
-        echo "  User webhook URLs are stored in the Registry sheet."
+        echo "  See central-hub/README.md for detailed instructions."
     else
         echo "Next steps for User Instance:"
         echo ""
@@ -834,7 +834,7 @@ case "${1:-}" in
         echo "  --help    Show this help"
         echo ""
         echo "Architecture:"
-        echo "  Hub:  Chat App only (no web app). All input via Google Chat."
+        echo "  Hub:  Web App + Chat App. Receives Chat events via HTTP endpoint."
         echo "  User: Web App. Receives webhooks from Hub. Sends chat messages to Hub."
         echo ""
         echo "Examples:"
