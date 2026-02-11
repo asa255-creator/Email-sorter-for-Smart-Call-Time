@@ -486,7 +486,7 @@ webapps = []
 
 for deployment in deployments:
     entry_points = deployment.get("entryPoints", [])
-    if any(entry.get("entryPointType") == "WEB_APP" for entry in entry_points):
+    if any(entry.get("entryPointType") in ("WEB_APP", "WEBAPP") for entry in entry_points):
         webapps.append(deployment)
 
 def sort_key(item):
@@ -504,6 +504,40 @@ PY
 # Get the most recent web app deployment ID (ignores library deployments).
 get_webapp_deployment_id() {
     get_webapp_deployment_ids | head -1
+}
+
+# Get the most recent deployment ID of any type (fallback when entry point metadata is missing).
+get_latest_deployment_id_any_type() {
+    local deploy_json
+    deploy_json=$(clasp deployments --json 2>/dev/null || echo "")
+
+    if [ -z "$deploy_json" ]; then
+        return 0
+    fi
+
+    echo "$deploy_json" | python - <<'PY'
+import json, sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+
+deployments = data.get("deployments", [])
+deployments.sort(key=lambda item: item.get("updateTime") or "", reverse=True)
+
+for deployment in deployments:
+    deployment_id = deployment.get("deploymentId")
+    if deployment_id:
+        print(deployment_id)
+        break
+PY
+}
+
+# Extract deployment ID from clasp deploy output (e.g., "Deployed AKfy... @6").
+extract_deploy_id_from_output() {
+    local output="$1"
+    echo "$output" | grep -o 'AKfy[a-zA-Z0-9_-]*' | head -1
 }
 
 # Keep only the specified web app deployment active.
@@ -536,8 +570,19 @@ deploy_webapp() {
 
     if [ -n "$DEPLOY_ID" ]; then
         print_info "Found existing web app deployment - updating in place..."
-        if ! clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>/dev/null; then
+        local deploy_output
+        deploy_output=$(clasp deploy --deploymentId "$DEPLOY_ID" --description "Update $(date +%Y-%m-%d)" 2>&1)
+        local deploy_exit=$?
+
+        if [ $deploy_exit -ne 0 ]; then
             print_warning "Web app update failed; keeping existing deployment without creating a new one."
+        fi
+
+        # Some clasp versions return a new deployment ID in output even on update.
+        local output_deploy_id
+        output_deploy_id=$(extract_deploy_id_from_output "$deploy_output")
+        if [ -n "$output_deploy_id" ]; then
+            DEPLOY_ID="$output_deploy_id"
         fi
     else
         print_info "No web app deployment found - creating one..."
