@@ -41,27 +41,60 @@ User Sheet  ──chat msg──>  Chat Space  ──event──>  Central Hub
 5. Click **Deploy** and copy the Web App URL
 6. Save this URL - you will paste it into Google Cloud Console (step 3 below)
 
-### 3. Configure as Chat App in Google Cloud Console
+### 3. Configure the Chat App in Google Cloud Console
 
-This is where you tell Google Chat to send messages to your Hub.
+This is where you connect Google Chat to your Hub so Chat events reach your web app.
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Select your project (or create one)
-3. Navigate to: **APIs & Services > Enabled APIs & services**
-4. Search for **Google Chat API** and enable it
-5. Click **Google Chat API** then go to the **Configuration** tab
-6. Fill in the Chat App settings:
-   - **App name**: Smart Call Time Hub
-   - **Avatar URL**: (optional)
-   - **Description**: Email sorter central hub
-   - **Functionality**: Check "Receive 1:1 messages" and "Join spaces and group conversations"
-   - **Connection settings**: Select **HTTP endpoint URL**
-   - **HTTP endpoint URL**: Paste your Web App URL from step 2
-   - **Authentication Audience**: Select **HTTP endpoint URL**
-   - **Visibility**: Make available to specific people or your domain
+2. Select the GCP project linked to your Apps Script
+   - To find your project: in Apps Script editor, go to **Project Settings** (gear icon) and note the GCP project number
+   - If no project is linked, click **Change project** and enter your GCP project number
+3. In Cloud Console, navigate to: **APIs & Services > Enabled APIs & services**
+4. Search for **Google Chat API** and click **Enable**
+5. Once enabled, click **Google Chat API** to open it
+6. Go to the **Configuration** tab
+
+#### Fill in the Chat App settings:
+
+| Field | Value |
+|-------|-------|
+| **App name** | Smart Call Time Hub |
+| **Avatar URL** | (optional) |
+| **Description** | Email sorter central hub |
+| **Interactive features** | Enabled (toggle ON) |
+| **Functionality** | Check both: "Receive 1:1 messages" and "Join spaces and group conversations" |
+| **Connection settings** | Select **HTTP endpoint URL** |
+| **HTTP endpoint URL** | Paste your **Web App URL** from step 2 |
+| **Authentication Audience** | Select **HTTP endpoint URL** |
+| **Visibility** | "Specific people and groups in your domain" — add yourself or your team |
+
 7. Click **Save**
 
-After saving, the Chat App will appear in Google Chat. Add it to your Chat space and it will start receiving messages.
+#### After saving:
+
+1. Open **Google Chat** in your browser
+2. Click **+ New chat** or **Find apps** (magnifying glass icon)
+3. Search for "Smart Call Time Hub" (the app name you entered above)
+4. Add the app to your Chat space
+5. The Hub will receive an `ADDED_TO_SPACE` event and auto-save the space ID
+
+#### Adding a Webhook to the Chat Space (for user-side outbound messages):
+
+User instances need a **Chat space webhook URL** to post messages into the space.
+This is separate from the Chat App — it's an incoming webhook that lets external scripts post messages.
+
+1. In **Google Chat**, open the Chat space where you added the Hub app
+2. Click the **space name** at the top to open space settings
+3. Click **Apps & integrations** (or **Integrations > Manage webhooks** in older UI)
+4. Click **Add webhooks**
+5. Give it a name (e.g. "Email Sorter Inbound") and optionally an avatar URL
+6. Click **Save** and **copy the webhook URL**
+7. In the Hub spreadsheet: **Hub Admin > Configure Chat Webhook** — paste the URL
+8. Share this same webhook URL with user instances (they store it as `chat_webhook_url` in their Config sheet)
+
+> **Note:** The Chat App endpoint (step 3 above) receives events FROM Google Chat.
+> The Chat space webhook (this step) allows scripts to post messages INTO the space.
+> Both are needed for the full round-trip flow.
 
 ### 4. Initial Setup (in the Hub Spreadsheet)
 
@@ -70,16 +103,6 @@ After saving, the Chat App will appear in Google Chat. Add it to your Chat space
 3. **Hub Admin > Configure Chat Space** - enter the space ID
    - To find it: open the Chat space in a browser, the URL contains the space ID
    - Format: `spaces/XXXXXXXXX`
-
-### 5. Configure Chat Webhook (for user-side outbound)
-
-Users need the Chat space webhook URL to post messages:
-
-1. In Google Chat, open the space
-2. Click the space name > **Apps & integrations** (or **Manage webhooks**)
-3. Create a new webhook, copy the URL
-4. In the Hub spreadsheet: **Hub Admin > Configure Chat Webhook**
-5. Share this webhook URL with user instances (they store it as `chat_webhook_url`)
 
 ## Sheets Created
 
@@ -132,6 +155,22 @@ From the Hub spreadsheet menu:
 - **Hub Admin > Test Webhook Ping** - ping a user's webhook
 - **Hub Admin > Test Chat Connection** - full round-trip test
 - **Hub Admin > Test Sheets Chat Round-Trip** - full test with message cleanup
+
+## OAuth Scopes
+
+The Hub uses **user-auth** (not service account), so the scopes in `appsscript.json` matter:
+
+| Scope | Purpose |
+|-------|---------|
+| `chat.messages` | Send and delete messages in the Chat space |
+| `chat.messages.readonly` | List/read messages (View Recent Chat Messages) |
+| `chat.spaces.readonly` | Verify setup (Chat.Spaces.get) |
+| `chat.memberships` | Space membership operations |
+| `spreadsheets` | Read/write Registry, Pending, Config, Log sheets |
+| `script.external_request` | Send outbound webhooks to user instances |
+
+> **Do NOT use** `chat.bot` — that is a service-account-only scope and will cause
+> "Access blocked / Error 400: invalid_scope" on the OAuth consent screen.
 
 ## Separate Deployment
 
