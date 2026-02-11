@@ -47,7 +47,7 @@ function createConfigSheet(ss) {
   // - webhook_url: This instance's deployed web app URL (Hub sends webhooks here)
   var config = [
     ['chat_webhook_url', 'https://chat.googleapis.com/v1/spaces/AAQAULujEoo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=O3mPCLnQbJzrWcN-qrZGqWBlTiAJbBukWCffMZh1VuQ', 'Webhook URL for Google Chat space. Used to post REGISTER, CONFIRM_COMPLETE, and notification messages.'],
-    ['webhook_url', '', 'This instance\'s deployed web app URL. Hub sends webhooks (labels, confirmations) here. Set automatically during deployment.'],
+    ['webhook_url', '', 'This instance\'s deployed web app URL. Hub sends webhooks here. Auto-detected on setup, or set via Settings > Set Webhook URL.'],
     ['instance_name', instanceName, 'Auto-generated from your email. Appears in Chat messages so Hub can route to you.'],
     ['hub_registered', 'false', 'Whether this instance is registered with the Hub. Set to true when Hub confirms.'],
     ['rate_limit_ms', '3000', 'Milliseconds to wait between processing emails in batch mode.'],

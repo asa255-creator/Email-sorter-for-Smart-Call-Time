@@ -39,6 +39,7 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(ui.createMenu('Settings')
       .addItem('Show Configuration', 'showConfig')
+      .addItem('Set Webhook URL', 'setWebhookUrlFromMenu')
       .addItem('Register with Hub (via Chat)', 'registerWithHubFromMenu')
       .addItem('Refresh All', 'refreshAll'))
     .addSeparator()
@@ -108,6 +109,9 @@ function emailSorterSetup() {
   // Prompt for instance name if not set
   promptForInstanceName(ui);
 
+  // Detect and save webhook URL to Config sheet
+  ensureWebhookUrl(ui);
+
   // Offer Hub registration during setup
   promptForHubRegistration(ui);
 
@@ -155,6 +159,73 @@ function promptForInstanceName(ui) {
 }
 
 /**
+ * Ensures the webhook URL (this instance's web app URL) is set in the Config sheet.
+ * Tries auto-detection first, then prompts the user to paste it manually.
+ * @param {Ui} ui - The SpreadsheetApp UI object
+ */
+function ensureWebhookUrl(ui) {
+  // getWebhookUrl() already tries auto-detection and saves to Config sheet
+  var url = getWebhookUrl();
+  if (url) {
+    logAction('CONFIG', 'WEBHOOK_URL_SET', 'Webhook URL: ' + url);
+    return;
+  }
+
+  // Auto-detect failed (not deployed as web app yet, or dev mode)
+  // Prompt the user to paste it manually
+  var response = ui.prompt('Webhook URL',
+    'Could not auto-detect your web app URL.\n\n' +
+    'To find it:\n' +
+    '1. Open Extensions > Apps Script\n' +
+    '2. Click Deploy > Manage deployments\n' +
+    '3. Copy the Web app URL\n\n' +
+    'Paste your deployed web app URL:',
+    ui.ButtonSet.OK_CANCEL);
+
+  if (response.getSelectedButton() === ui.Button.OK) {
+    var manualUrl = response.getResponseText().trim();
+    if (manualUrl && manualUrl.indexOf('script.google.com') !== -1) {
+      setWebhookUrl(manualUrl);
+      logAction('CONFIG', 'WEBHOOK_URL_MANUAL', 'Manually set webhook URL: ' + manualUrl);
+    } else if (manualUrl) {
+      ui.alert('Invalid URL',
+        'That doesn\'t look like a Google Apps Script web app URL.\n' +
+        'It should start with https://script.google.com/macros/s/\n\n' +
+        'You can set it later in the Config sheet (webhook_url row).',
+        ui.ButtonSet.OK);
+    }
+  }
+}
+
+/**
+ * Menu action to manually set or update the webhook URL.
+ */
+function setWebhookUrlFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+  var currentUrl = getConfigValue('webhook_url') || '(not set)';
+
+  var response = ui.prompt('Set Webhook URL',
+    'Current webhook URL:\n' + currentUrl + '\n\n' +
+    'Enter your deployed web app URL:\n' +
+    '(Find it in Deploy > Manage deployments in the Apps Script editor)',
+    ui.ButtonSet.OK_CANCEL);
+
+  if (response.getSelectedButton() === ui.Button.OK) {
+    var url = response.getResponseText().trim();
+    if (url && url.indexOf('script.google.com') !== -1) {
+      setWebhookUrl(url);
+      ui.alert('Saved', 'Webhook URL updated in Config sheet.', ui.ButtonSet.OK);
+      logAction('CONFIG', 'WEBHOOK_URL_MANUAL', 'Webhook URL set from menu: ' + url);
+    } else if (url) {
+      ui.alert('Invalid URL',
+        'That doesn\'t look like a Google Apps Script web app URL.\n' +
+        'It should start with https://script.google.com/macros/s/',
+        ui.ButtonSet.OK);
+    }
+  }
+}
+
+/**
  * Refreshes all modules - syncs labels, updates instructions.
  */
 function refreshAll() {
@@ -186,11 +257,18 @@ function promptForHubRegistration(ui) {
 
   var webhookUrl = getWebhookUrl();
   if (!webhookUrl) {
-    ui.alert('Web App Not Deployed',
-      'Deploy this project as a web app first so the Hub can send webhooks to you.\n' +
-      'Your webhook URL will be set automatically during deployment.',
-      ui.ButtonSet.OK);
-    return;
+    // Try to let user set it right now instead of dead-ending
+    ensureWebhookUrl(ui);
+    webhookUrl = getConfigValue('webhook_url');
+    if (!webhookUrl) {
+      ui.alert('Webhook URL Not Set',
+        'Your web app URL is not set in the Config sheet.\n\n' +
+        'You can set it anytime via:\n' +
+        '  Settings > Set Webhook URL\n' +
+        '  Or edit the Config sheet directly (webhook_url row)',
+        ui.ButtonSet.OK);
+      return;
+    }
   }
 
   var response = ui.alert(
@@ -242,10 +320,16 @@ function registerWithHubFromMenu() {
 
   var webhookUrl = getWebhookUrl();
   if (!webhookUrl) {
-    ui.alert('Not Deployed',
-      'No webhook URL set. Deploy as web app first.',
-      ui.ButtonSet.OK);
-    return;
+    ensureWebhookUrl(ui);
+    webhookUrl = getConfigValue('webhook_url');
+    if (!webhookUrl) {
+      ui.alert('Webhook URL Not Set',
+        'Your web app URL is not set.\n\n' +
+        'Set it via Settings > Set Webhook URL\n' +
+        'or edit the Config sheet directly (webhook_url row).',
+        ui.ButtonSet.OK);
+      return;
+    }
   }
 
   var result = registerWithHub();
