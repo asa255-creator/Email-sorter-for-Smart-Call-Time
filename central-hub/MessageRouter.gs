@@ -313,6 +313,7 @@ function getMessageType(payload) {
  */
 function isSystemMessage(messageType) {
   var systemTypes = [
+    MESSAGE_TYPES.EMAIL_READY,
     MESSAGE_TYPES.TEST_CHAT_CONNECTION,
     MESSAGE_TYPES.SHEETS_CHAT_TEST,
     MESSAGE_TYPES.CONFIRMED,
