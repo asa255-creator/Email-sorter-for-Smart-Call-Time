@@ -454,10 +454,12 @@ cd Email-sorter-for-Smart-Call-Time
 ./setup.sh
 ```
 
-One-line full re-download:
+One-line full re-download (from your home folder):
 ```bash
-cd .. && rm -rf Email-sorter-for-Smart-Call-Time && git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git && cd Email-sorter-for-Smart-Call-Time && ./setup.sh
+cd ~ && rm -rf Email-sorter-for-Smart-Call-Time && git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git && cd Email-sorter-for-Smart-Call-Time && ./setup.sh
 ```
+
+If you see `Permission denied` or `Read-only file system`, you are likely in a protected directory (like `/` or `/Users`). Run the command above exactly as written so cloning happens in your home directory (`~`).
 
 ---
 
