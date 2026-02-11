@@ -28,6 +28,18 @@ function onMessage(event) {
 
     logHub('MESSAGE_RECEIVED', `From: ${sender}, Message: ${message.substring(0, 100)}...`);
 
+    const parsed = parseMessage(message);
+
+    if (parsed.instanceName && isTestChatLabels(parsed.labels)) {
+      const testResult = handleTestChatMessage(parsed);
+
+      if (testResult.success) {
+        return { text: `Test chat connection successful for ${parsed.instanceName}.` };
+      }
+
+      return { text: `Test chat connection failed: ${testResult.error}` };
+    }
+
     // Parse the AI response to extract labels and target user
     const routeResult = routeMessage(message, sender);
 
@@ -137,6 +149,12 @@ function doPost(e) {
         // Direct API call to route labels (for testing or Flow integration)
         const routeResult = routeLabelsToUser(data.instanceName, data.labels, data.emailId);
         return jsonResponse(routeResult);
+
+      case 'test_webhook_ping':
+        return jsonResponse(handleTestWebhookPing(data));
+
+      case 'test_webhook_success':
+        return jsonResponse(handleTestWebhookSuccess(data));
 
       case 'confirm_complete':
         // User confirms labels were applied - clean up chat messages

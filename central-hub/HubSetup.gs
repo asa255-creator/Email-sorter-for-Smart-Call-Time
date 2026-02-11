@@ -24,9 +24,8 @@ function onOpen() {
     .addItem('View Pending Requests', 'showPendingRequests')
     .addItem('Cleanup Old Requests', 'cleanupPendingRequests')
     .addSeparator()
-    .addItem('Test Chat Connection', 'testChatConnection')
-    .addItem('Test Route to User', 'testRouteToUser')
-    .addItem('Test Invite User', 'testInviteUser')
+    .addItem('Test Webhook Ping (Hub → User → Hub)', 'testWebhookPingFromHub')
+    .addItem('Test Chat Connection (Hub → User → Chat → Hub)', 'testChatConnectionFromHub')
     .addToUi();
 }
 
@@ -177,93 +176,6 @@ function showPendingRequests() {
     ui.alert('No Pending', 'No pending requests. All have been processed.', ui.ButtonSet.OK);
   } else {
     ui.alert('Pending Requests', `${pending} pending request(s):\n\n${message}`, ui.ButtonSet.OK);
-  }
-}
-
-// ============================================================================
-// TEST FUNCTIONS
-// ============================================================================
-
-/**
- * Tests the Chat connection by sending a test message.
- */
-function testChatConnection() {
-  const ui = SpreadsheetApp.getUi();
-
-  const result = sendStatusToChat('Hub test message - Chat connection is working!');
-
-  if (result.success) {
-    ui.alert('Success', 'Test message sent to Chat successfully!', ui.ButtonSet.OK);
-  } else {
-    ui.alert('Failed', `Could not send message: ${result.error}`, ui.ButtonSet.OK);
-  }
-}
-
-/**
- * Tests routing to a user.
- */
-function testRouteToUser() {
-  const ui = SpreadsheetApp.getUi();
-
-  const users = getAllActiveUsers();
-
-  if (users.length === 0) {
-    ui.alert('No Users', 'No registered users to test with.', ui.ButtonSet.OK);
-    return;
-  }
-
-  // Use first user for test
-  const testUser = users[0];
-
-  const response = ui.prompt(
-    'Test Route',
-    `Test routing to ${testUser.instanceName}?\n\nEnter test labels (e.g., "Test, Demo"):`,
-    ui.ButtonSet.OK_CANCEL
-  );
-
-  if (response.getSelectedButton() === ui.Button.OK) {
-    const labels = response.getResponseText().trim() || 'Test Label';
-
-    const result = routeLabelsToUser(testUser.instanceName, labels, 'test_email_id');
-
-    if (result.success) {
-      ui.alert('Success', `Routed "${labels}" to ${testUser.instanceName}\n\nWebhook response: ${JSON.stringify(result.webhookResponse)}`, ui.ButtonSet.OK);
-    } else {
-      ui.alert('Failed', `Routing failed: ${result.error}`, ui.ButtonSet.OK);
-    }
-  }
-}
-
-/**
- * Tests inviting a user to the Chat space.
- */
-function testInviteUser() {
-  const ui = SpreadsheetApp.getUi();
-
-  const spaceId = getHubConfig('chat_space_id');
-  if (!spaceId) {
-    ui.alert('Not Configured', 'Chat space ID not configured. Run "Configure Chat Space" first.', ui.ButtonSet.OK);
-    return;
-  }
-
-  const response = ui.prompt(
-    'Test Invite',
-    'Enter email address to invite to the Chat space:',
-    ui.ButtonSet.OK_CANCEL
-  );
-
-  if (response.getSelectedButton() === ui.Button.OK) {
-    const email = response.getResponseText().trim();
-
-    if (email) {
-      const result = inviteUserToSpace(email);
-
-      if (result.success) {
-        ui.alert('Success', result.message, ui.ButtonSet.OK);
-      } else {
-        ui.alert('Failed', `Invite failed: ${result.error}`, ui.ButtonSet.OK);
-      }
-    }
   }
 }
 

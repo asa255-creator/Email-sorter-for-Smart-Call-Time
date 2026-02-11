@@ -70,7 +70,43 @@ function routeMessage(message, sender) {
  * @returns {Object} Routing result
  */
 function routeLabelsToUser(instanceName, labels, emailId) {
-  // Get user from registry
+  const payload = {
+    action: 'update_labels',
+    labels: labels,
+    emailId: emailId || '',
+    fromHub: true,
+    timestamp: new Date().toISOString()
+  };
+
+  const result = sendWebhookToUser(instanceName, payload);
+
+  if (result.success) {
+    logHub('ROUTED_SUCCESS', `${instanceName}: ${labels}`);
+    return {
+      success: true,
+      instanceName: instanceName,
+      labels: labels,
+      webhookResponse: result.webhookResponse
+    };
+  }
+
+  logHub('ROUTED_FAILED', `${instanceName}: ${result.error}`);
+  return {
+    success: false,
+    error: result.error,
+    instanceName: instanceName,
+    responseText: result.responseText
+  };
+}
+
+/**
+ * Sends a JSON payload to a user's webhook.
+ *
+ * @param {string} instanceName - Target instance name
+ * @param {Object} payload - Payload to send
+ * @returns {Object} Result
+ */
+function sendWebhookToUser(instanceName, payload) {
   const user = getUserByInstance(instanceName);
 
   if (!user) {
@@ -89,16 +125,7 @@ function routeLabelsToUser(instanceName, labels, emailId) {
     };
   }
 
-  // Call user's webhook
   try {
-    const payload = {
-      action: 'update_labels',
-      labels: labels,
-      emailId: emailId || '',
-      fromHub: true,
-      timestamp: new Date().toISOString()
-    };
-
     const response = UrlFetchApp.fetch(user.webhookUrl, {
       method: 'POST',
       contentType: 'application/json',
@@ -117,28 +144,20 @@ function routeLabelsToUser(instanceName, labels, emailId) {
         result = { rawResponse: responseText };
       }
 
-      logHub('ROUTED_SUCCESS', `${instanceName}: ${labels}`);
-
       return {
         success: true,
         instanceName: instanceName,
-        labels: labels,
         webhookResponse: result
-      };
-    } else {
-      logHub('ROUTED_FAILED', `${instanceName}: HTTP ${responseCode}`);
-
-      return {
-        success: false,
-        error: `Webhook returned HTTP ${responseCode}`,
-        instanceName: instanceName,
-        responseText: responseText
       };
     }
 
+    return {
+      success: false,
+      error: `Webhook returned HTTP ${responseCode}`,
+      instanceName: instanceName,
+      responseText: responseText
+    };
   } catch (error) {
-    logHub('ROUTE_ERROR', `${instanceName}: ${error.message}`);
-
     return {
       success: false,
       error: `Failed to call webhook: ${error.message}`,
@@ -227,4 +246,48 @@ function validateLabels(labels) {
   }
 
   return true;
+}
+
+// ============================================================================
+// TEST MESSAGE HANDLING
+// ============================================================================
+
+/**
+ * Returns true if labels represent a test chat connection message.
+ *
+ * @param {string} labels - Labels text
+ * @returns {boolean}
+ */
+function isTestChatLabels(labels) {
+  if (!labels) return false;
+  return labels.trim().toUpperCase().startsWith('TEST_CHAT_CONNECTION');
+}
+
+/**
+ * Handles a test chat message routed through Chat.
+ *
+ * @param {Object} parsed - Parsed message (instanceName, labels, emailId)
+ * @returns {Object} Result
+ */
+function handleTestChatMessage(parsed) {
+  const testId = parsed.emailId || '';
+
+  const payload = {
+    action: 'test_chat_success',
+    instanceName: parsed.instanceName,
+    testId: testId,
+    message: 'Test successful',
+    origin: 'hub',
+    timestamp: new Date().toISOString()
+  };
+
+  const result = sendWebhookToUser(parsed.instanceName, payload);
+
+  if (result.success) {
+    logHub('TEST_CHAT_SUCCESS', `${parsed.instanceName} (${testId || 'no-id'})`);
+    return { success: true };
+  }
+
+  logHub('TEST_CHAT_FAILED', `${parsed.instanceName}: ${result.error}`);
+  return { success: false, error: result.error };
 }
