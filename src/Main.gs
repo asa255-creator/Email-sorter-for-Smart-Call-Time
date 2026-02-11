@@ -44,6 +44,8 @@ function onOpen() {
       .addItem('Refresh All', 'refreshAll'))
     .addSeparator()
     .addSubMenu(ui.createMenu('Testing')
+      .addItem('View Recent Chat Messages', 'viewRecentChatMessagesFromMenu')
+      .addSeparator()
       .addItem('Test Webhook Ping (Hub -> User)', 'testWebhookPingFromUser')
       .addItem('Test Chat Connection (User -> Chat -> Hub -> User)', 'testChatConnectionFromUser')
       .addItem('Test Sheets Chat Round-Trip (Full test with cleanup)', 'testSheetsChatFromUser'))

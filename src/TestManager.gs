@@ -237,6 +237,90 @@ function handleTestSheetsChatComplete(data) {
 }
 
 // ============================================================================
+// VIEW RECENT CHAT MESSAGES
+// ============================================================================
+
+/**
+ * Extracts the space name (e.g. "spaces/AAQAULujEoo") from the chat webhook URL.
+ * @returns {string|null} The space name or null
+ */
+function getSpaceNameFromWebhook() {
+  var webhookUrl = getConfigValue('chat_webhook_url');
+  if (!webhookUrl) return null;
+
+  // Webhook URL format: https://chat.googleapis.com/v1/spaces/SPACE_ID/messages?...
+  var match = webhookUrl.match(/\/v1\/(spaces\/[^\/]+)\//);
+  return match ? match[1] : null;
+}
+
+/**
+ * Lists recent messages from the Google Chat space.
+ * Uses the Chat API advanced service (must be enabled in appsscript.json).
+ * @param {number} [count] - Number of messages to fetch (default 10, max 25)
+ * @returns {Array} Array of message objects
+ */
+function listRecentChatMessages(count) {
+  var spaceName = getSpaceNameFromWebhook();
+  if (!spaceName) {
+    throw new Error('Cannot determine space name from chat_webhook_url. Check Config sheet.');
+  }
+
+  var pageSize = Math.min(count || 10, 25);
+
+  var response = Chat.Spaces.Messages.list(spaceName, {
+    pageSize: pageSize,
+    orderBy: 'createTime desc'
+  });
+
+  return response.messages || [];
+}
+
+/**
+ * Menu action: View recent messages in the Chat space.
+ * Displays the last 10 messages in a dialog so you can see what the Hub sees.
+ */
+function viewRecentChatMessagesFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+
+  try {
+    var messages = listRecentChatMessages(10);
+
+    if (!messages || messages.length === 0) {
+      ui.alert('No Messages', 'No messages found in the Chat space.', ui.ButtonSet.OK);
+      return;
+    }
+
+    var lines = messages.map(function(msg, i) {
+      var time = msg.createTime || '(no time)';
+      var sender = '(unknown)';
+      if (msg.sender && msg.sender.displayName) {
+        sender = msg.sender.displayName;
+      }
+      var text = msg.text || msg.formattedText || '(no text)';
+      // Truncate long messages for the dialog
+      if (text.length > 200) {
+        text = text.substring(0, 200) + '...';
+      }
+      return (i + 1) + '. [' + time + '] ' + sender + ':\n   ' + text;
+    });
+
+    ui.alert('Recent Chat Messages (newest first)',
+      lines.join('\n\n'),
+      ui.ButtonSet.OK);
+
+  } catch (e) {
+    ui.alert('Error',
+      'Could not fetch chat messages.\n\n' +
+      'Error: ' + e.message + '\n\n' +
+      'Make sure:\n' +
+      '1. Google Chat API is enabled in your GCP project\n' +
+      '2. The Chat advanced service is enabled in Apps Script\n' +
+      '3. You have access to the Chat space',
+      ui.ButtonSet.OK);
+  }
+}
+
+// ============================================================================
 // HELPERS
 // ============================================================================
 
