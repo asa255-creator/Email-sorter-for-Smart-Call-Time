@@ -20,6 +20,7 @@ function onOpen() {
     .addItem('Configure Chat Webhook', 'configureChatWebhook')
     .addItem('Configure Chat Space (for invites)', 'configureChatSpace')
     .addSeparator()
+    .addItem('View Recent Chat Messages', 'viewRecentChatMessagesFromHub')
     .addItem('View Registered Users', 'showRegisteredUsers')
     .addItem('View Pending Requests', 'showPendingRequests')
     .addItem('Cleanup Old Requests', 'cleanupPendingRequests')
