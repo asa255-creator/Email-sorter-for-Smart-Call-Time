@@ -607,10 +607,11 @@ commit_hub_url() {
 
             # Push so user instances get it on next pull/setup
             local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-            if git push origin "$current_branch" 2>/dev/null; then
+            if GIT_TERMINAL_PROMPT=0 git push origin "$current_branch" 2>/dev/null; then
                 print_success "Hub URL pushed - user instances will auto-detect it"
             else
-                print_warning "Could not push Hub URL (push manually or users can enter it)"
+                print_warning "Could not push Hub URL automatically."
+                print_info "Run manually: git push origin $current_branch"
             fi
         fi
     else
