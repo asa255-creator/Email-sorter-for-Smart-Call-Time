@@ -134,6 +134,10 @@ pull_latest() {
                 # Restore config files
                 restore_config_files "$BACKUP_DIR"
                 print_info "Config files restored"
+
+                # Re-exec with the updated setup.sh so new code takes effect
+                print_info "Restarting with updated script..."
+                exec "$0" "$@"
             else
                 print_error "Failed to update to latest GitHub code."
                 restore_config_files "$BACKUP_DIR"
