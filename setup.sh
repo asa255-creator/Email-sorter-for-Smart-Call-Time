@@ -759,7 +759,11 @@ register_with_hub() {
     local instance_name=$(echo "$user_email" | cut -d'@' -f1 | tr -cd 'a-zA-Z0-9_')
 
     # Make registration request
-    local response=$(curl -s -L -X POST "$hub_url" \
+    # Note: Do NOT use -X POST with -L. Google Apps Script redirects (302)
+    # after processing. -X POST forces POST on the redirect URL too, which
+    # returns a "Page Not Found" error. Using just -d implies POST for the
+    # initial request and lets curl convert to GET on redirect.
+    local response=$(curl -s -L \
         -H "Content-Type: application/json" \
         -H "Accept: application/json" \
         -d "{
@@ -767,7 +771,7 @@ register_with_hub() {
             \"email\": \"$user_email\",
             \"instanceName\": \"$instance_name\",
             \"webhookUrl\": \"$webapp_url\"
-        }" 2>/dev/null)
+        }" "$hub_url" 2>/dev/null)
 
     # Check response
     if echo "$response" | grep -q '"success":true'; then
