@@ -54,14 +54,17 @@ function runHubSetup() {
   ui.alert(
     'Hub Setup Complete',
     'Required sheets have been created.\n\n' +
-    'The Hub is a Chat App only (no web app deployment needed).\n\n' +
     'Next steps:\n' +
-    '1. Add the Hub as a Chat App in Google Cloud Console\n' +
-    '2. Add the Chat App to your Chat space\n' +
-    '3. Configure the Chat Webhook URL (Hub Admin > Configure Chat Webhook)\n' +
-    '4. Configure the Chat Space ID (Hub Admin > Configure Chat Space)\n\n' +
-    'Users register by posting REGISTER messages to the Chat space.\n' +
-    'User webhook URLs are stored in the Registry sheet.',
+    '1. Deploy as Web App (Deploy > New deployment > Web app)\n' +
+    '2. Copy the Web App URL\n' +
+    '3. In Google Cloud Console, enable the Chat API\n' +
+    '4. Go to Chat API > Configuration tab\n' +
+    '5. Set Connection settings to "HTTP endpoint URL"\n' +
+    '6. Paste the Web App URL as the HTTP endpoint\n' +
+    '7. Add the Chat App to your Chat space\n' +
+    '8. Configure Chat Webhook (Hub Admin > Configure Chat Webhook)\n' +
+    '9. Configure Chat Space ID (Hub Admin > Configure Chat Space)\n\n' +
+    'See README.md for detailed instructions.',
     ui.ButtonSet.OK
   );
 }
