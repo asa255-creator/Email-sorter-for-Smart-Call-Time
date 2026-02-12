@@ -176,9 +176,15 @@ function listChatMessages(pageSize) {
       pageSize: pageSize || 50
     });
 
+    // Debug: log the response keys to understand the API structure
+    if (response) {
+      logHub('LIST_MESSAGES_DEBUG', 'Response keys: ' + Object.keys(response).join(', '));
+    }
+
+    var msgs = response.messages || [];
     return {
       success: true,
-      messages: response.messages || []
+      messages: msgs
     };
 
   } catch (error) {
