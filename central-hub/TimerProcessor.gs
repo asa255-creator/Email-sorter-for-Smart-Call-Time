@@ -86,12 +86,24 @@ function scanForRegistrationMessages(messages) {
     var msgType = getMessageType(parsed.labels);
 
     if (parsed.instanceName && msgType === 'REGISTER') {
-      // Skip if this user is already registered (pending or active)
-      // The REGISTER message stays in chat until CONFIRMED is processed.
-      // Without this check, every timer cycle would re-register and reset status to 'pending'.
+      // Check if user is already registered
       var existingUser = getUserByInstance(parsed.instanceName);
+
       if (existingUser && (existingUser.status === 'pending' || existingUser.status === 'active')) {
-        logHub('TIMER_REGISTER_SKIP', parsed.instanceName + ' already ' + existingUser.status + ' — skipping duplicate REGISTER');
+        // User exists — check if the webhook URL in this REGISTER message differs
+        // from what's stored. If so, re-process to update the URL (common when user
+        // re-deploys their web app and gets a new URL).
+        var regData = parseRegistrationData(msg.text);
+        var newWebhookUrl = regData.webhook || '';
+
+        if (newWebhookUrl && newWebhookUrl !== existingUser.webhookUrl) {
+          logHub('TIMER_REGISTER_UPDATE', parsed.instanceName + ' already ' + existingUser.status +
+            ' but webhook URL changed: ' + existingUser.webhookUrl + ' → ' + newWebhookUrl + ' — re-processing');
+          handleChatRegistration(parsed, msg.text, msg.name);
+        } else {
+          logHub('TIMER_REGISTER_SKIP', parsed.instanceName + ' already ' + existingUser.status +
+            ' with same webhook URL — skipping duplicate REGISTER');
+        }
         continue;
       }
 

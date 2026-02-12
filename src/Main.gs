@@ -108,8 +108,9 @@ function emailSorterSetup() {
   // Prompt for instance name if not set
   promptForInstanceName(ui);
 
-  // Detect and save webhook URL to Config sheet
+  // Detect, verify, and save webhook URL to Config sheet
   ensureWebhookUrl(ui);
+  verifyWebhookUrl(ui);
 
   // Offer Hub registration during setup
   promptForHubRegistration(ui);
@@ -192,6 +193,79 @@ function ensureWebhookUrl(ui) {
         'It should start with https://script.google.com/macros/s/\n\n' +
         'You can set it later in the Config sheet (webhook_url row).',
         ui.ButtonSet.OK);
+    }
+  }
+}
+
+/**
+ * Verifies the webhook URL is reachable by sending a GET request to it.
+ * If the GET fails or returns an error page, warns the user and offers
+ * to set the URL manually.
+ *
+ * @param {Ui} ui - The SpreadsheetApp UI object
+ */
+function verifyWebhookUrl(ui) {
+  var url = getConfigValue('webhook_url');
+  if (!url) return; // Nothing to verify
+
+  logAction('CONFIG', 'WEBHOOK_VERIFY', 'Verifying webhook URL: ' + url);
+
+  try {
+    var response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      muteHttpExceptions: true,
+      followRedirects: true
+    });
+
+    var code = response.getResponseCode();
+    var body = response.getContentText();
+
+    logAction('CONFIG', 'WEBHOOK_VERIFY_RESULT', 'HTTP ' + code + ' | ' + body.substring(0, 200));
+
+    if (code === 200) {
+      // Check the response looks like our doGet (JSON with status field)
+      try {
+        var parsed = JSON.parse(body);
+        if (parsed.status && parsed.status.indexOf('Webhook Active') !== -1) {
+          logAction('CONFIG', 'WEBHOOK_VERIFY_OK', 'Webhook URL verified successfully');
+          return; // All good
+        }
+      } catch (e) {
+        // Not JSON — might be an error page
+      }
+    }
+
+    // URL returned something unexpected (error page, redirect to Google login, etc.)
+    logAction('CONFIG', 'WEBHOOK_VERIFY_WARN', 'Webhook URL returned unexpected response: HTTP ' + code);
+
+    var bodyPreview = body.length > 300 ? body.substring(0, 300) + '...' : body;
+    var result = ui.alert('Webhook URL Warning',
+      'The stored webhook URL may not be working correctly.\n\n' +
+      'URL: ' + url + '\n' +
+      'HTTP Status: ' + code + '\n' +
+      'Response: ' + bodyPreview + '\n\n' +
+      'This can happen if the web app was re-deployed.\n\n' +
+      'Would you like to update the webhook URL now?',
+      ui.ButtonSet.YES_NO);
+
+    if (result === ui.Button.YES) {
+      // Clear the bad URL and prompt for a new one
+      setConfigValue('webhook_url', '');
+      ensureWebhookUrl(ui);
+    }
+
+  } catch (error) {
+    logAction('CONFIG', 'WEBHOOK_VERIFY_ERROR', 'Failed to reach webhook URL: ' + error.message);
+
+    var result = ui.alert('Webhook URL Error',
+      'Could not reach your webhook URL:\n' + url + '\n\n' +
+      'Error: ' + error.message + '\n\n' +
+      'Would you like to update the webhook URL now?',
+      ui.ButtonSet.YES_NO);
+
+    if (result === ui.Button.YES) {
+      setConfigValue('webhook_url', '');
+      ensureWebhookUrl(ui);
     }
   }
 }
