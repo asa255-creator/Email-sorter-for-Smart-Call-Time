@@ -467,20 +467,29 @@ function handleConfirmedMessage(parsed, messageName) {
   // Remove pending request
   removePendingRequest(instanceName, conversationId);
 
+  // If this was a registration confirmation, activate the user
+  var pendingType = (pending.metadata && pending.metadata.type) || pending.type || '';
+  if (pendingType === 'registration') {
+    activateUser(instanceName);
+    logHub('REGISTRATION_COMPLETE', instanceName + ' — status set to active');
+  }
+
   // Send success webhook to user
   var payload = {
-    action: 'test_sheets_chat_complete',
+    action: pendingType === 'registration' ? 'registration_complete' : 'test_sheets_chat_complete',
     instanceName: instanceName,
     conversationId: conversationId,
     messagesDeleted: allMessages.length,
-    message: 'Test complete. Chat messages deleted.',
+    message: pendingType === 'registration'
+      ? 'Registration complete. You are now fully registered.'
+      : 'Test complete. Chat messages deleted.',
     origin: 'hub',
     timestamp: new Date().toISOString()
   };
 
   sendWebhookToUser(instanceName, payload);
 
-  logHub('SHEETS_CHAT_TEST_COMPLETE', instanceName + ' [' + conversationId + '] - ' + allMessages.length + ' messages deleted');
+  logHub('CONFIRMED_COMPLETE', instanceName + ' [' + conversationId + '] - ' + allMessages.length + ' messages deleted (type: ' + pendingType + ')');
 
   return { success: true, deleted: allMessages.length };
 }
