@@ -428,6 +428,31 @@ NODE_OPTIONS="--max-old-space-size=8192" clasp push
 | Users can't register | Check Hub is deployed with "Anyone" access |
 | Messages not routing | Check Registry sheet has user entry |
 | AI responses lost | Check Pending sheet; verify Chat app is receiving |
+| Webhook returns 404 | The user's deployment URL has changed — see "Fixing a Stale Webhook URL" below |
+
+### Fixing a Stale Webhook URL
+
+If the Hub logs show **HTTP 404** when sending to a user's webhook, the user's Apps Script deployment URL is out of date in the Registry. Follow these steps to find the correct URL and update it.
+
+**Step 1: Get the user's current deployment URL**
+
+1. Open the **user's** Apps Script project (Extensions > Apps Script from their spreadsheet)
+2. Click **Deploy > Manage deployments**
+3. Find the active **Web app** deployment
+4. Copy the **Web app URL** — it looks like:
+   `https://script.google.com/macros/s/AKfycb.../exec`
+
+**Step 2: Update the Hub Registry**
+
+1. Open the **Hub spreadsheet**
+2. Go to the **Registry** sheet
+3. Find the row for the affected user (match by instance name in column A)
+4. Replace the value in **column D** (`webhookUrl`) with the new URL from Step 1
+
+**Step 3: Verify**
+
+1. In the Hub's Apps Script editor, select **`retryPendingRegistrationWebhooks`** from the function dropdown and click **Run**
+2. Check the execution log — you should see a **200** response instead of 404
 
 ### Fresh Start
 
