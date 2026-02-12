@@ -139,7 +139,7 @@ function testSheetsChatFromUser() {
   var testId = Utilities.getUuid();
 
   // Send test message using consistent format
-  var message = buildChatMessage(instanceName, testId, 'SHEETS_CHAT_TEST');
+  var message = buildChatMessage(instanceName, testId, 'SHEETS_CHAT_TEST', 'processing');
   postToChat(webhookUrl, message);
 
   // Store the testId so the webhook handler can use it
@@ -178,7 +178,7 @@ function handleTestSheetsChatStart(data) {
   }
 
   // Send SHEETS_CHAT_TEST message to chat using consistent format
-  var message = buildChatMessage(instanceName, conversationId, 'SHEETS_CHAT_TEST');
+  var message = buildChatMessage(instanceName, conversationId, 'SHEETS_CHAT_TEST', 'processing');
   postToChat(webhookUrl, message);
 
   // Store the conversation ID for tracking
@@ -209,7 +209,7 @@ function handleTestSheetsChatConfirm(data) {
   }
 
   // Send CONFIRMED reply using consistent format
-  var message = buildChatMessage(instanceName, conversationId, 'CONFIRMED');
+  var message = buildChatMessage(instanceName, conversationId, 'CONFIRMED', 'closed');
   postToChat(webhookUrl, message);
 
   logAction('SYSTEM', 'SHEETS_CHAT_CONFIRMED_SENT', 'Sent CONFIRMED [' + conversationId + ']');
@@ -249,5 +249,5 @@ function handleTestSheetsChatComplete(data) {
  * @returns {string} Formatted test message
  */
 function buildTestChatMessage(instanceName, testId) {
-  return buildChatMessage(instanceName, testId, 'TEST_CHAT_CONNECTION');
+  return buildChatMessage(instanceName, testId, 'TEST_CHAT_CONNECTION', 'processing');
 }

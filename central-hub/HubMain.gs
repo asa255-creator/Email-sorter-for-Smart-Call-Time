@@ -121,7 +121,7 @@ function handleChatRegistration(parsed, fullMessage, messageName) {
       return { success: false, error: 'Missing required fields. Message must include email=... and webhook=...' };
     }
 
-    var instanceName = parsed.instanceName;
+    var instanceName = parsed.user || parsed.instanceName;
 
     // Register user in the Registry sheet
     var result = registerUser({
@@ -187,7 +187,7 @@ function handleChatRegistration(parsed, fullMessage, messageName) {
  */
 function handleChatUnregistration(parsed, messageName) {
   try {
-    var result = unregisterUser(parsed.instanceName);
+    var result = unregisterUser(parsed.user || parsed.instanceName);
 
     // Delete the chat message
     if (messageName) {

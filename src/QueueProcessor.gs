@@ -183,18 +183,23 @@ function postNextQueuedEmail(sheet) {
       var instanceName = getInstanceName();
       var labels = getLabelsForNotification();
 
-      var body = '\n===== AVAILABLE LABELS =====\n' + labels +
+      var body = '===== AVAILABLE LABELS =====\n' + labels +
         '\n\n===== EMAIL TO CATEGORIZE =====\n' +
         'Email ID: ' + emailId + '\n' +
         'Subject: ' + subject + '\n' +
         'From: ' + from + '\n\n' +
         context +
         '\n\n===== INSTRUCTIONS =====\n' +
-        'Respond with: @' + instanceName + ':[' + emailId + '] Label1, Label2\n' +
+        'Respond with the matching label(s) from AVAILABLE LABELS above, using this format:\n' +
+        'user: ' + instanceName + '\n' +
+        'conversation_id: ' + emailId + '\n' +
+        'type: LABEL_RESPONSE\n' +
+        'status: closed\n\n' +
+        'Label1, Label2\n\n' +
         'Use ONLY labels from AVAILABLE LABELS above.\n' +
-        'If nothing fits, respond with: @' + instanceName + ':[' + emailId + '] NONE';
+        'If nothing fits, respond with NONE as the body.';
 
-      var message = buildChatMessage(instanceName, emailId, 'EMAIL_READY', body);
+      var message = buildChatMessage(instanceName, emailId, 'EMAIL_READY', 'processing', body);
 
       // Post to Chat
       postToChat(webhookUrl, message);
@@ -256,7 +261,7 @@ function applyLabelsAndAdvanceQueue(emailId, labelsString) {
   var webhookUrl = getChatWebhookUrl();
   if (webhookUrl) {
     var instanceName = getInstanceName();
-    var confirmMsg = buildChatMessage(instanceName, emailId, 'CONFIRM_COMPLETE');
+    var confirmMsg = buildChatMessage(instanceName, emailId, 'CONFIRM_COMPLETE', 'closed');
     postToChat(webhookUrl, confirmMsg);
     logAction(emailId, 'CONFIRM_SENT', 'Posted CONFIRM_COMPLETE to Chat');
   }

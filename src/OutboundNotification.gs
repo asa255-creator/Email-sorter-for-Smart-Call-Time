@@ -119,20 +119,33 @@ function postToChat(webhookUrl, message) {
 // ============================================================================
 
 /**
- * Builds a chat message using the consistent format.
+ * Builds a chat message using the consistent key-value header format.
  *
- * FORMAT: @{instanceName}:[{conversationId}] {MESSAGE_TYPE}
+ * FORMAT:
+ *   user: {instanceName}
+ *   conversation_id: {conversationId}
+ *   type: {messageType}
+ *   status: {status}
+ *
+ *   {optional body}
+ *
+ * This is the ONLY function that builds chat messages. If the format
+ * changes, update this function and the hub-side parseChatMessage() only.
  *
  * @param {string} instanceName - User instance name
  * @param {string} conversationId - Conversation/tracking ID (emailId or UUID)
  * @param {string} messageType - Message type (e.g. EMAIL_READY, CONFIRM_COMPLETE)
- * @param {string} [body] - Optional message body after the header line
+ * @param {string} status - Message status: 'processing' or 'closed'
+ * @param {string} [body] - Optional message body after the header
  * @returns {string} Formatted chat message
  */
-function buildChatMessage(instanceName, conversationId, messageType, body) {
-  var header = '@' + instanceName + ':[' + conversationId + '] ' + messageType;
+function buildChatMessage(instanceName, conversationId, messageType, status, body) {
+  var header = 'user: ' + instanceName + '\n' +
+               'conversation_id: ' + conversationId + '\n' +
+               'type: ' + messageType + '\n' +
+               'status: ' + (status || 'processing');
   if (body) {
-    return header + '\n' + body;
+    return header + '\n\n' + body;
   }
   return header;
 }
