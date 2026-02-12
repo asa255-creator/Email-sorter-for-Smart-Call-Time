@@ -39,6 +39,12 @@
  * Called by the 15-minute time-based trigger.
  */
 function checkInboxAndPostNext() {
+  // Only process emails if registered with Hub
+  if (getConfigValue('hub_registered') !== 'true') {
+    logAction('SYSTEM', 'TIMER_SKIP', 'Not registered with Hub — skipping inbox scan');
+    return;
+  }
+
   var ss = SpreadsheetApp.getActive();
   var sheet = ss.getSheetByName('Queue');
   if (!sheet) return;
@@ -348,6 +354,15 @@ function parseLabelsString(labelString) {
  */
 function scanInboxNow() {
   var ui = SpreadsheetApp.getUi();
+
+  if (getConfigValue('hub_registered') !== 'true') {
+    ui.alert('Not Registered',
+      'This instance is not registered with the Hub.\n\n' +
+      'Register first via:\n  Settings > Register with Hub (via Chat)',
+      ui.ButtonSet.OK);
+    return;
+  }
+
   var ss = SpreadsheetApp.getActive();
   var sheet = ss.getSheetByName('Queue');
 
