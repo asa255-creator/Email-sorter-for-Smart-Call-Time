@@ -115,21 +115,26 @@ Here is every step a single email goes through, from discovery to cleanup.
      }
      ```
 
-### Step 9 — User: Posts Next Email
-- Immediately after labeling (in the same webhook handler, not waiting for timer):
-  - Calls `processNextInQueue()`
-  - Finds the next `Queued` row in the Queue sheet
-  - If found: posts it to Chat (back to Step 2), sets Status → `Posted`
-  - If none: queue is empty, waits for next 15-min timer to discover new emails
+### Step 9 — User: Confirms Completion & Posts Next Email
+- After labels are applied (in the same webhook handler):
+  1. **Posts `@instanceName:[emailId] CONFIRM_COMPLETE` to Chat** — tells the Hub "I applied the labels, safe to clean up"
+  2. Calls `processNextInQueue()`
+  3. Finds the next `Queued` row in the Queue sheet
+  4. If found: posts it to Chat (back to Step 2), sets Status → `Posted`
+  5. If none: queue is empty, waits for next 15-min timer to discover new emails
+- **Why confirmation is required:** The Hub can't just delete the EMAIL_READY Chat message after dispatching labels — it has no proof the user actually applied them. The CONFIRM_COMPLETE message is the user saying "done, clean up." Without it, the Hub would lose the email data if the webhook had silently failed.
 
-### Step 10 — Hub: Chat Message Cleanup
-- **This is the step that was missing from the original plan**
-- On the next timer pass (or immediately after receiving success webhook response):
-  - Hub checks "Emails Ready for Labeling" for rows with Status = `dispatched`
-  - For each dispatched row:
-    1. Uses the stored **Chat Message Name** to **delete the original EMAIL_READY message** from the Chat space via `deleteChatMessages([chatMessageName])`
-    2. Marks the row Status → `completed`
-  - `cleanupOldEntries()` removes completed rows older than 24h
+### Step 10 — Hub: Chat Message Cleanup (Next Timer Cycle)
+- On the **next Hub timer pass**, `scanForConfirmationMessages()` runs:
+  - Lists messages in the Chat space
+  - Finds messages containing `CONFIRM_COMPLETE`
+  - For each CONFIRM_COMPLETE:
+    1. Parses the `emailId` from the message header
+    2. Looks up the emailId in the **"Emails Ready for Labeling" sheet** to get the stored **Chat Message Name**
+    3. **Deletes the original EMAIL_READY message** from Chat via `deleteChatMessages([chatMessageName])`
+    4. **Deletes the CONFIRM_COMPLETE message itself** from Chat
+    5. Marks the labeling sheet row Status → `completed`
+  - `cleanupOldEntries()` removes `completed` rows older than 24h
 
 ### Complete — Cycle Repeats
 - The user's next email (from Step 9) is now sitting in Chat
@@ -138,17 +143,18 @@ Here is every step a single email goes through, from discovery to cleanup.
 
 ---
 
-## Flow Diagram (Updated with Cleanup)
+## Flow Diagram (Updated with Confirmation + Cleanup)
 
 ```
 USER (15min timer)                    CHAT SPACE                         HUB (5min timer)
 ─────────────────                    ──────────                         ────────────────
 1. Scan inbox, add to Queue               │
-2. Post TOP email to Chat  ──────►  [Message appears]                        │
+2. Post TOP email to Chat  ──────►  [EMAIL_READY message]                   │
                                           │                                   │
                                           │                    3a. Scan for registration msgs
-                                          │                    3b. Scan for confirmation msgs
-                                          │                        → delete associated messages
+                                          │                    3b. Scan for CONFIRM_COMPLETE msgs
+                                          │                        → delete EMAIL_READY + CONFIRM
+                                          │                        → mark labeling row completed
                                           │                    3c. Add ✅ to EMAIL_READY msgs
                                      [✅ emoji added]              (can be multiple at once)
                                           │                                   │
@@ -162,14 +168,17 @@ USER (15min timer)                    CHAT SPACE                         HUB (5m
 8. Receive webhook                        │                                   │
 9. Apply labels to Gmail                  │                                   │
 10. Delete Queue row                      │                                   │
-11. Return success to Hub                 │                                   │
-                                          │              ┌─── 12. Hub receives success
-12. Post NEXT email to Chat ──────► [Next msg]           │    13. Delete original EMAIL_READY
-                                          │              │        message from Chat space
-                                          │              │    14. Mark labeling row completed
-                                          │              └─── 15. Clean up old completed rows
+11. Post CONFIRM_COMPLETE  ──────►  [CONFIRM_COMPLETE msg]                   │
+12. Post NEXT email to Chat ──────► [Next EMAIL_READY msg]                   │
+                                          │                                   │
+                                          │         (next timer cycle)        │
+                                          │                    3b. See CONFIRM_COMPLETE
+                                          │                        → delete old EMAIL_READY msg
+                                          │                        → delete CONFIRM_COMPLETE msg
+                                          │                    3c. See new EMAIL_READY msg
+                                          │                        → add ✅ emoji
                                           │
-                              (cycle repeats from step 3c)
+                              (cycle repeats from step 4)
 ```
 
 ---
@@ -269,13 +278,16 @@ function hubTimerProcess() {
   - Mark rows as `dispatched` after sending webhook
   - If the webhook response confirms success immediately, can proceed to cleanup in the same pass
 
-- **`cleanupProcessedMessages()` (the missing piece):**
-  - Reads "Emails Ready for Labeling" sheet for rows with Status = `dispatched`
-  - For each row:
-    1. Uses the stored Chat Message Name to call `deleteChatMessages([chatMessageName])`
-    2. Marks the row Status → `completed`
-  - Calls `cleanupOldEntries()` to remove completed rows older than 24h
-  - This keeps the Chat space clean — processed EMAIL_READY messages are deleted after labels are applied
+- **`cleanupProcessedMessages()`:**
+  - This is NOT triggered by a sheet status — it's triggered by seeing **CONFIRM_COMPLETE messages in Chat**
+  - `scanForConfirmationMessages()` already handles this (Step 3b):
+    1. Finds CONFIRM_COMPLETE messages in Chat
+    2. Parses the emailId
+    3. Looks up the Chat Message Name in the labeling sheet
+    4. Deletes the original EMAIL_READY message + the CONFIRM_COMPLETE message
+    5. Marks the labeling row `completed`
+  - Separately, `cleanupOldEntries()` removes `completed` rows older than 24h
+  - **Why confirmation-gated:** The Hub can't delete Chat messages after dispatch alone — if the user's webhook silently failed, the email data would be lost. CONFIRM_COMPLETE is the user's proof that labels were applied.
 
 ---
 
@@ -470,8 +482,9 @@ Everything below applies to files in `src/`.
   1. Receive: `{ action: "apply_labels", emailId, labels, chatMessageName }`
   2. Apply labels to the Gmail message
   3. Delete/remove the Queue row for that Email ID
-  4. Call `processNextInQueue()` to post the next email to Chat
-  5. Return success/failure response (Hub uses this to know cleanup is safe)
+  4. **Post `CONFIRM_COMPLETE` to Chat** — tells Hub labels were applied, safe to clean up
+  5. Call `processNextInQueue()` to post the next email to Chat
+  6. Return success/failure response
 
 - **Important**: Change from `doPost` to `doGet` for webhook receipt (per user's specification), OR support both. Apps Script web apps can handle both `doGet(e)` and `doPost(e)`.
 
@@ -502,7 +515,8 @@ Everything below applies to files in `src/`.
   {email body/context}
   ```
 - Remove: `notifyQueueComplete()`, `notifyQueueStarted()` (Hub doesn't need these; processing is per-message now)
-- Remove: `notifyHubComplete()` / CONFIRM_COMPLETE messages (cleanup is now handled by Hub using the Chat Message Name from the labeling sheet — no need for user to post back to Chat)
+- Remove: `notifyHubComplete()` (replaced by CONFIRM_COMPLETE)
+- **Keep: `CONFIRM_COMPLETE` message** — essential for the Hub to know labels were applied and Chat cleanup is safe
 - Keep: Registration and confirmation messages
 - Keep: Test messages
 

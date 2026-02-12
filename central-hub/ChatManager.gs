@@ -154,6 +154,97 @@ function deleteChatMessages(messageNames) {
 }
 
 // ============================================================================
+// MESSAGE LISTING (for timer-based polling)
+// ============================================================================
+
+/**
+ * Lists recent messages in the Chat space.
+ * Used by TimerProcessor to scan for EMAIL_READY, REGISTER, CONFIRM_COMPLETE, etc.
+ *
+ * @param {number} [pageSize] - Number of messages to retrieve (default 50, max 100)
+ * @returns {Object} Result with messages array
+ */
+function listChatMessages(pageSize) {
+  var spaceId = getHubConfig('chat_space_id');
+
+  if (!spaceId) {
+    return { success: false, error: 'Chat space ID not configured', messages: [] };
+  }
+
+  try {
+    var response = Chat.Spaces.Messages.list(spaceId, {
+      pageSize: pageSize || 50
+    });
+
+    return {
+      success: true,
+      messages: response.messages || []
+    };
+
+  } catch (error) {
+    logHub('LIST_MESSAGES_ERROR', error.message);
+    return { success: false, error: error.message, messages: [] };
+  }
+}
+
+// ============================================================================
+// EMOJI REACTIONS
+// ============================================================================
+
+/**
+ * Adds an emoji reaction to a Chat message.
+ * Used to add ✅ to EMAIL_READY messages, which triggers Google Flow.
+ *
+ * @param {string} messageName - Full message name (e.g., "spaces/xxx/messages/yyy")
+ * @param {string} [emoji] - Unicode emoji to add (default "✅")
+ * @returns {Object} Result with success status
+ */
+function addReactionToMessage(messageName, emoji) {
+  try {
+    Chat.Spaces.Messages.Reactions.create(
+      { emoji: { unicode: emoji || '\u2705' } },
+      messageName
+    );
+
+    logHub('REACTION_ADDED', messageName + ' ' + (emoji || '\u2705'));
+    return { success: true };
+
+  } catch (error) {
+    // ALREADY_EXISTS means we already reacted — not an error
+    if (error.message.indexOf('ALREADY_EXISTS') !== -1) {
+      return { success: true, alreadyExists: true };
+    }
+    logHub('REACTION_ERROR', messageName + ': ' + error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Checks if a message already has a specific emoji reaction from the app.
+ * Used to avoid double-reacting to EMAIL_READY messages.
+ *
+ * @param {Object} message - Chat message object (from listChatMessages)
+ * @param {string} [emoji] - Unicode emoji to check for (default "✅")
+ * @returns {boolean} True if the message already has the reaction
+ */
+function messageHasReaction(message, emoji) {
+  var targetEmoji = emoji || '\u2705';
+
+  if (!message.emojiReactionSummaries) {
+    return false;
+  }
+
+  for (var i = 0; i < message.emojiReactionSummaries.length; i++) {
+    var summary = message.emojiReactionSummaries[i];
+    if (summary.emoji && summary.emoji.unicode === targetEmoji) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// ============================================================================
 // STATUS MESSAGES
 // ============================================================================
 
