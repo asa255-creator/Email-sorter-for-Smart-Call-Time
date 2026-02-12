@@ -125,10 +125,19 @@ function configureChatSpace() {
     let spaceId = response.getResponseText().trim();
 
     if (spaceId) {
-      // Ensure proper format
-      if (!spaceId.startsWith('spaces/')) {
-        spaceId = 'spaces/' + spaceId;
-      }
+      // Clean up common mistakes from Chat URLs
+      // URL might be: chat.google.com/chat/u/0/#chat/space/AAQAULujEoo
+      // Or pasted as: spaces/space/AAQAULujEoo (wrong — extra /space/)
+      // Correct format: spaces/AAQAULujEoo
+
+      // Strip everything before the actual space code
+      var spaceCode = spaceId.replace(/.*\/space\//, '')   // from URL paths
+                             .replace(/.*\/room\//, '')     // from room URLs
+                             .replace(/^spaces\//, '')      // strip spaces/ prefix
+                             .replace(/\/.*/g, '')          // strip trailing paths
+                             .trim();
+
+      spaceId = 'spaces/' + spaceCode;
 
       setHubConfig('chat_space_id', spaceId);
       ui.alert('Success', `Chat space ID saved: ${spaceId}\n\nNew user registrations will now receive automatic invites.`, ui.ButtonSet.OK);
