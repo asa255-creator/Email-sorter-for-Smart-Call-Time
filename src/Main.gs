@@ -32,8 +32,7 @@ function onOpen() {
       .addItem('Setup / Refresh', 'emailSorterSetup')
       .addSeparator()
       .addItem('Sync Labels Now', 'syncLabelsToSheet')
-      .addItem('Queue Unlabeled Emails', 'queueUnlabeledEmails')
-      .addItem('Process All Pending', 'processAllPending')
+      .addItem('Scan Inbox Now', 'scanInboxNow')
       .addSeparator()
       .addItem('Clear Queue', 'clearQueue'))
     .addSeparator()
@@ -63,18 +62,18 @@ function setupTriggers() {
   var triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(function(trigger) {
     var handlerName = trigger.getHandlerFunction();
-    if (handlerName === 'onEditTrigger' || handlerName === 'checkQueueForProcessing') {
+    if (handlerName === 'onEditTrigger' || handlerName === 'checkQueueForProcessing' || handlerName === 'checkInboxAndPostNext') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
 
-  // Create 15-minute time-based trigger for queue checking
-  ScriptApp.newTrigger('checkQueueForProcessing')
+  // Create 15-minute time-based trigger for inbox scanning + posting to Chat
+  ScriptApp.newTrigger('checkInboxAndPostNext')
     .timeBased()
     .everyMinutes(15)
     .create();
 
-  logAction('SYSTEM', 'SETUP', 'Time-based trigger installed (every 15 min)');
+  logAction('SYSTEM', 'SETUP', 'Time-based trigger installed (checkInboxAndPostNext every 15 min)');
 }
 
 // ============================================================================

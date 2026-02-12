@@ -20,9 +20,15 @@ function onOpen() {
     .addItem('Configure Chat Webhook', 'configureChatWebhook')
     .addItem('Configure Chat Space (for invites)', 'configureChatSpace')
     .addSeparator()
+    .addSubMenu(ui.createMenu('Timer')
+      .addItem('Start Hub Timer (5-min)', 'setupHubTimer')
+      .addItem('Stop Hub Timer', 'removeHubTimer')
+      .addItem('Run Timer Now (manual)', 'hubTimerProcess'))
+    .addSeparator()
     .addItem('View Recent Chat Messages', 'viewRecentChatMessagesFromHub')
     .addItem('View Registered Users', 'showRegisteredUsers')
     .addItem('View Pending Requests', 'showPendingRequests')
+    .addItem('View Labeling Queue', 'showLabelingQueue')
     .addItem('Cleanup Old Requests', 'cleanupPendingRequests')
     .addSeparator()
     .addItem('Delete Pending Chat Messages', 'deletePendingChatMessages')
@@ -50,6 +56,7 @@ function runHubSetup() {
   getOrCreatePendingSheet();
   getOrCreateLogSheet();
   getOrCreateConfigSheet();
+  getOrCreateLabelingSheet();
 
   ui.alert(
     'Hub Setup Complete',
@@ -187,6 +194,43 @@ function showPendingRequests() {
   } else {
     ui.alert('Pending Requests', `${pending} pending request(s):\n\n${message}`, ui.ButtonSet.OK);
   }
+}
+
+/**
+ * Shows labeling queue status in a dialog.
+ */
+function showLabelingQueue() {
+  var ui = SpreadsheetApp.getUi();
+  var sheet = getOrCreateLabelingSheet();
+  var lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) {
+    ui.alert('Empty', 'No entries in the labeling queue.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var data = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+  var counts = { 'new': 0, dispatched: 0, completed: 0 };
+  var details = '';
+
+  for (var i = 0; i < data.length; i++) {
+    var status = data[i][4] || 'unknown';
+    counts[status] = (counts[status] || 0) + 1;
+    if (status !== 'completed') {
+      details += '- ' + data[i][1] + '/' + data[i][0] + ': ' + data[i][2] + ' [' + status + ']\n';
+    }
+  }
+
+  var message = 'Labeling Queue Summary:\n\n' +
+    'New (pending dispatch): ' + counts['new'] + '\n' +
+    'Dispatched (awaiting confirm): ' + counts.dispatched + '\n' +
+    'Completed: ' + counts.completed + '\n';
+
+  if (details) {
+    message += '\nActive entries:\n' + details;
+  }
+
+  ui.alert('Labeling Queue', message, ui.ButtonSet.OK);
 }
 
 // ============================================================================

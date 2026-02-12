@@ -679,6 +679,12 @@ show_completion() {
         echo "     e. Save and add the Chat App to your space"
         echo "  4. Click: Hub Admin > Configure Chat Webhook"
         echo "  5. Click: Hub Admin > Configure Chat Space"
+        echo "  6. Click: Hub Admin > Timer > Start Hub Timer (5-min)"
+        echo ""
+        echo "  The Hub timer polls Chat every 5 minutes to:"
+        echo "    - Add emoji reactions to EMAIL_READY messages (triggers Flow)"
+        echo "    - Dispatch labeled results to users via webhook"
+        echo "    - Clean up confirmed Chat messages"
         echo ""
         echo "  See central-hub/README.md for detailed instructions."
     else
@@ -691,6 +697,11 @@ show_completion() {
         echo ""
         echo "  Registration posts a REGISTER message to Google Chat."
         echo "  The Hub will see it, store your webhook URL, and confirm."
+        echo ""
+        echo "  Once registered, the 15-min timer will:"
+        echo "    - Auto-scan your inbox for unlabeled emails"
+        echo "    - Post one email at a time to Chat for AI labeling"
+        echo "    - Apply labels automatically when the Hub sends them back"
 
         if [ -f "$SRC_DIR/.webapp_url" ]; then
             echo ""

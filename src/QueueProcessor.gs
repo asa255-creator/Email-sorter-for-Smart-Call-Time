@@ -2,348 +2,330 @@
  * Smart Call Time - Flow Integrator
  * Queue Processor Module
  *
- * Handles the email processing queue:
- * - Adding unread emails to queue
- * - Processing queue items when Flow updates them
- * - Managing queue state
+ * Timer-based polling model:
+ * - 15-min timer scans inbox for unlabeled emails, adds to Queue
+ * - Posts ONE email at a time to Chat (Status = "Posted")
+ * - When Hub sends labels back via webhook, applies them and posts next
+ *
+ * Queue Sheet Columns (8 columns):
+ *   A: Email ID
+ *   B: Subject
+ *   C: From
+ *   D: Date
+ *   E: (reserved)
+ *   F: Status (Queued / Posted / Error)
+ *   G: Posted At
+ *   H: Context (full email body for Chat message)
+ *
+ * Status lifecycle: Queued → Posted → (deleted after labels applied)
+ *
+ * Dependencies:
+ *   - OutboundNotification.gs: postToChat(), buildChatMessage(),
+ *                               getLabelsForNotification(), getInstanceName()
+ *   - ConfigManager.gs: getConfigValue(), getChatWebhookUrl()
+ *   - LabelManager.gs: applyLabelsToEmail()
+ *   - Logger.gs: logAction()
  */
 
 // ============================================================================
-// QUEUE MANAGEMENT
+// MAIN TIMER ENTRY POINT
 // ============================================================================
 
 /**
- * Adds all unlabeled emails to the Queue sheet for processing.
- * First email gets Status = "Processing", rest get "Pending".
- * Context column filled with full email content for Flow/AI to read.
- * Called via menu: Smart Call Time > Email Sorter > Queue Unlabeled Emails
+ * Main 15-minute timer function.
+ * 1. Scans inbox for unlabeled emails, adds new ones to Queue as "Queued"
+ * 2. If no email is currently "Posted", posts the top Queued email to Chat
+ *
+ * Called by the 15-minute time-based trigger.
  */
-function queueUnlabeledEmails() {
-  const ss = SpreadsheetApp.getActive();
-  const ui = SpreadsheetApp.getUi();
-  const sheet = ss.getSheetByName('Queue');
+function checkInboxAndPostNext() {
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Queue');
+  if (!sheet) return;
 
-  if (!sheet) {
-    ui.alert('Error', 'Queue sheet not found. Run setup first.', ui.ButtonSet.OK);
-    return;
+  // Step 1: Scan inbox for new unlabeled emails
+  var added = scanInboxForNewEmails(sheet);
+  if (added > 0) {
+    logAction('SYSTEM', 'INBOX_SCAN', 'Added ' + added + ' new email(s) to queue');
   }
 
-  const batchSize = parseInt(getConfigValue('batch_size') || '50');
-  // Search for emails without any user labels
-  const threads = GmailApp.search('has:nouserlabels', 0, batchSize);
+  // Step 2: If nothing is currently Posted, post the next Queued email
+  if (!hasPostedRow(sheet)) {
+    postNextQueuedEmail(sheet);
+  }
+}
 
-  if (threads.length === 0) {
-    ui.alert('No Emails', 'No unlabeled emails found to process.', ui.ButtonSet.OK);
-    return;
+// ============================================================================
+// INBOX SCANNING
+// ============================================================================
+
+/**
+ * Scans Gmail for unlabeled emails and adds new ones to the Queue sheet.
+ * All new emails get Status = "Queued".
+ *
+ * @param {Sheet} sheet - The Queue sheet
+ * @returns {number} Number of new emails added
+ */
+function scanInboxForNewEmails(sheet) {
+  var batchSize = parseInt(getConfigValue('batch_size') || '50');
+
+  try {
+    var threads = GmailApp.search('has:nouserlabels', 0, batchSize);
+  } catch (error) {
+    logAction('SYSTEM', 'INBOX_ERROR', 'Gmail search failed: ' + error.message);
+    return 0;
   }
 
-  // Get existing email IDs to avoid duplicates
-  const existingIds = getExistingQueueIds(sheet);
+  if (threads.length === 0) return 0;
 
-  // Check if there's already a "Processing" row
-  const hasProcessing = hasProcessingRow(sheet);
+  var existingIds = getExistingQueueIds(sheet);
+  var newRows = [];
 
-  // Build all rows with full context upfront
-  const newRows = [];
-  threads.forEach((thread, index) => {
-    const message = thread.getMessages()[0];
-    const emailId = message.getId();
+  for (var i = 0; i < threads.length; i++) {
+    var message = threads[i].getMessages()[0];
+    var emailId = message.getId();
 
-    if (!existingIds.has(emailId)) {
-      // Fetch full context for every email
-      const context = buildEmailContext(message);
+    if (existingIds.has(emailId)) continue;
 
-      newRows.push([
-        emailId,
-        message.getSubject() || '(no subject)',
-        message.getFrom(),
-        message.getDate().toISOString(),
-        '', // Labels to Apply - Flow fills this
-        'Pending', // All start as Pending, we'll set first to Processing after
-        '', // Processed At
-        context
-      ]);
-    }
-  });
+    var context = buildEmailContext(message);
 
-  // Set first row to Processing if no existing Processing row
-  if (newRows.length > 0 && !hasProcessing) {
-    newRows[0][5] = 'Processing';
+    newRows.push([
+      emailId,
+      message.getSubject() || '(no subject)',
+      message.getFrom(),
+      message.getDate().toISOString(),
+      '', // Column E (reserved)
+      'Queued',
+      '', // Posted At
+      context
+    ]);
   }
 
-  if (newRows.length === 0) {
-    ui.alert('Already Queued',
-      'All unread emails are already in the queue.',
-      ui.ButtonSet.OK);
-    return;
-  }
+  if (newRows.length === 0) return 0;
 
-  // Append to sheet (8 columns now)
-  const startRow = sheet.getLastRow() + 1;
+  var startRow = sheet.getLastRow() + 1;
   sheet.getRange(startRow, 1, newRows.length, 8).setValues(newRows);
 
-  // Send outbound notification to Google Chat
-  notifyQueueStarted(newRows.length);
-  notifyOldEmailReady();
-
-  ui.alert('Emails Queued',
-    `Added ${newRows.length} emails to the queue.\n\n` +
-    'Flow will process emails one at a time:\n' +
-    '- First row has Status = "Processing"\n' +
-    '- Flow reads Context column for email content\n' +
-    '- After labeling, row is deleted and next becomes "Processing"',
-    ui.ButtonSet.OK);
-
-  logAction('SYSTEM', 'QUEUE', `Queued ${newRows.length} emails`);
+  return newRows.length;
 }
 
 /**
- * Builds full email context string for AI processing.
+ * Builds full email context string for Chat message.
+ *
  * @param {GmailMessage} message - The Gmail message
  * @returns {string} Formatted email content
  */
 function buildEmailContext(message) {
-  const from = message.getFrom() || '';
-  const subject = message.getSubject() || '(no subject)';
-  const date = message.getDate().toISOString();
-  const body = message.getPlainBody() || '';
+  var from = message.getFrom() || '';
+  var subject = message.getSubject() || '(no subject)';
+  var date = message.getDate().toISOString();
+  var body = message.getPlainBody() || '';
 
-  // Truncate body if too long (Sheets cell limit is ~50k chars)
-  const maxBodyLength = 10000;
-  const truncatedBody = body.length > maxBodyLength
+  var maxBodyLength = 10000;
+  var truncatedBody = body.length > maxBodyLength
     ? body.substring(0, maxBodyLength) + '\n... [truncated]'
     : body;
 
-  return `FROM: ${from}\nSUBJECT: ${subject}\nDATE: ${date}\n\nBODY:\n${truncatedBody}`;
+  return 'FROM: ' + from + '\nSUBJECT: ' + subject + '\nDATE: ' + date + '\n\nBODY:\n' + truncatedBody;
+}
+
+// ============================================================================
+// POST TO CHAT
+// ============================================================================
+
+/**
+ * Posts the next Queued email to Chat and marks it as Posted.
+ * Only posts ONE email — the top Queued row.
+ *
+ * @param {Sheet} [sheet] - The Queue sheet (fetched if not provided)
+ * @returns {boolean} True if an email was posted
+ */
+function postNextQueuedEmail(sheet) {
+  if (!sheet) {
+    sheet = SpreadsheetApp.getActive().getSheetByName('Queue');
+    if (!sheet) return false;
+  }
+
+  var webhookUrl = getChatWebhookUrl();
+  if (!webhookUrl) {
+    logAction('SYSTEM', 'POST_SKIP', 'No chat_webhook_url configured');
+    return false;
+  }
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return false;
+
+  var data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+
+  // Find the first Queued row
+  for (var i = 0; i < data.length; i++) {
+    if (data[i][5] === 'Queued') {
+      var rowNum = i + 2;
+      var emailId = data[i][0];
+      var subject = data[i][1];
+      var from = data[i][2];
+      var context = data[i][7];
+
+      // Build the EMAIL_READY message
+      var instanceName = getInstanceName();
+      var labels = getLabelsForNotification();
+
+      var body = '\n===== AVAILABLE LABELS =====\n' + labels +
+        '\n\n===== EMAIL TO CATEGORIZE =====\n' +
+        'Email ID: ' + emailId + '\n' +
+        'Subject: ' + subject + '\n' +
+        'From: ' + from + '\n\n' +
+        context +
+        '\n\n===== INSTRUCTIONS =====\n' +
+        'Respond with: @' + instanceName + ':[' + emailId + '] Label1, Label2\n' +
+        'Use ONLY labels from AVAILABLE LABELS above.\n' +
+        'If nothing fits, respond with: @' + instanceName + ':[' + emailId + '] NONE';
+
+      var message = buildChatMessage(instanceName, emailId, 'EMAIL_READY', body);
+
+      // Post to Chat
+      postToChat(webhookUrl, message);
+
+      // Mark as Posted
+      sheet.getRange(rowNum, 6).setValue('Posted');
+      sheet.getRange(rowNum, 7).setValue(new Date().toISOString());
+
+      logAction(emailId, 'POSTED', 'Posted to Chat: ' + subject);
+      return true;
+    }
+  }
+
+  return false; // No Queued rows found
+}
+
+// ============================================================================
+// LABEL APPLICATION (called by InboundWebhook when Hub sends labels)
+// ============================================================================
+
+/**
+ * Applies labels to an email and removes it from the queue.
+ * Called by InboundWebhook.handleApplyLabels() when Hub sends a webhook.
+ *
+ * After applying labels:
+ * 1. Posts CONFIRM_COMPLETE to Chat (tells Hub to clean up)
+ * 2. Deletes the Queue row
+ * 3. Posts the next Queued email to Chat
+ *
+ * @param {string} emailId - The Gmail email ID
+ * @param {string} labelsString - Comma-separated label names
+ * @returns {Object} Result with success status
+ */
+function applyLabelsAndAdvanceQueue(emailId, labelsString) {
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Queue');
+
+  if (!sheet) {
+    return { success: false, error: 'Queue sheet not found' };
+  }
+
+  // Parse labels
+  var labels = parseLabelsString(labelsString);
+
+  // Apply labels to the email (unless NONE)
+  if (labels.length > 0) {
+    try {
+      applyLabelsToEmail(emailId, labels);
+      logAction(emailId, 'LABELED', 'Applied: ' + labels.join(', '));
+    } catch (error) {
+      logAction(emailId, 'LABEL_ERROR', error.message);
+      return { success: false, error: 'Failed to apply labels: ' + error.message };
+    }
+  } else {
+    logAction(emailId, 'SKIP', 'No labels to apply (NONE)');
+  }
+
+  // Post CONFIRM_COMPLETE to Chat — tells the Hub labels were applied
+  var webhookUrl = getChatWebhookUrl();
+  if (webhookUrl) {
+    var instanceName = getInstanceName();
+    var confirmMsg = buildChatMessage(instanceName, emailId, 'CONFIRM_COMPLETE');
+    postToChat(webhookUrl, confirmMsg);
+    logAction(emailId, 'CONFIRM_SENT', 'Posted CONFIRM_COMPLETE to Chat');
+  }
+
+  // Delete the Queue row for this email
+  deleteQueueRowByEmailId(sheet, emailId);
+
+  // Post the next Queued email to Chat
+  postNextQueuedEmail(sheet);
+
+  return {
+    success: true,
+    emailId: emailId,
+    labelsApplied: labels
+  };
+}
+
+// ============================================================================
+// QUEUE HELPERS
+// ============================================================================
+
+/**
+ * Checks if there's a row with Status = "Posted" (awaiting labeling).
+ *
+ * @param {Sheet} sheet - The Queue sheet
+ * @returns {boolean} True if a Posted row exists
+ */
+function hasPostedRow(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return false;
+
+  var statuses = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
+  for (var i = 0; i < statuses.length; i++) {
+    if (statuses[i][0] === 'Posted') return true;
+  }
+  return false;
 }
 
 /**
- * Checks if there's already a row with Status = "Processing".
+ * Deletes the Queue row matching an email ID.
+ *
  * @param {Sheet} sheet - The Queue sheet
- * @returns {boolean} True if a Processing row exists
+ * @param {string} emailId - Email ID to find and delete
+ * @returns {boolean} True if row was found and deleted
  */
-function hasProcessingRow(sheet) {
-  const lastRow = sheet.getLastRow();
+function deleteQueueRowByEmailId(sheet, emailId) {
+  var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return false;
 
-  const statuses = sheet.getRange(2, 6, lastRow - 1, 1).getValues();
-  return statuses.some(row => row[0] === 'Processing');
+  var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i][0] === emailId) {
+      sheet.deleteRow(i + 2);
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
  * Gets existing email IDs in the queue.
+ *
  * @param {Sheet} sheet - The Queue sheet
  * @returns {Set} Set of existing email IDs
  */
 function getExistingQueueIds(sheet) {
-  const existingIds = new Set();
-  const lastRow = sheet.getLastRow();
+  var existingIds = new Set();
+  var lastRow = sheet.getLastRow();
 
   if (lastRow > 1) {
-    const data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    data.forEach(row => {
-      if (row[0]) existingIds.add(row[0]);
-    });
+    var data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < data.length; i++) {
+      if (data[i][0]) existingIds.add(data[i][0]);
+    }
   }
 
   return existingIds;
 }
 
-// ============================================================================
-// QUEUE PROCESSING
-// ============================================================================
-
-/**
- * Processes a single queue row when the "Labels to Apply" column is updated.
- * Only processes rows with Status = "Processing".
- * Deletes the row after success and promotes next Pending to Processing.
- * Called by the onEdit trigger.
- * @param {number} rowNumber - The row number that was edited
- * @returns {boolean} True if row was deleted
- */
-function processQueueRow(rowNumber) {
-  // Skip header row
-  if (rowNumber <= 1) return false;
-
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Queue');
-  if (!sheet) return false;
-
-  // Read the row (8 columns now)
-  const row = sheet.getRange(rowNumber, 1, 1, 8).getValues()[0];
-  const emailId = row[0];
-  const labelsToApply = row[4]; // Column E
-  const status = row[5]; // Column F
-
-  // Only process if:
-  // - We have labels to apply
-  // - Status is "Processing"
-  if (!labelsToApply || labelsToApply.trim() === '' || status !== 'Processing') {
-    return false;
-  }
-
-  // Parse labels (comma-separated)
-  const labels = parseLabelsString(labelsToApply);
-
-  // Handle NONE or empty - delete row and promote next
-  if (labels.length === 0) {
-    logAction(emailId, 'SKIP', 'No labels to apply');
-    sheet.deleteRow(rowNumber);
-    promoteNextPending();
-    return true;
-  }
-
-  try {
-    // Apply labels
-    const result = applyLabelsToEmail(emailId, labels);
-
-    // Notify Hub that processing is complete (triggers Chat message cleanup)
-    notifyHubComplete(emailId);
-
-    // Success - delete the row from queue
-    sheet.deleteRow(rowNumber);
-
-    // Promote next Pending row to Processing (triggers Flow again)
-    promoteNextPending();
-
-    return true;
-
-  } catch (error) {
-    // Handle error - keep row for review, but still promote next
-    sheet.getRange(rowNumber, 6).setValue('Error');
-    sheet.getRange(rowNumber, 7).setValue(new Date().toISOString());
-    logAction(emailId, 'ERROR', error.message);
-
-    // Still promote next pending so queue keeps moving
-    promoteNextPending();
-
-    return false;
-  }
-}
-
-/**
- * Promotes the first "Pending" row to "Processing".
- * Only promotes if there are NO other Processing rows waiting for labels.
- * This prevents over-promoting when new emails arrive via Flow.
- */
-function promoteNextPending() {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Queue');
-  if (!sheet) return;
-
-  const lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return; // No data rows
-
-  // Check all statuses and labels
-  const data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
-
-  // Count Processing rows that are waiting for labels (no labels filled yet)
-  let processingWaitingCount = 0;
-  let firstPendingIndex = -1;
-
-  for (let i = 0; i < data.length; i++) {
-    const labelsToApply = data[i][4]; // Column E
-    const status = data[i][5]; // Column F
-
-    if (status === 'Processing' && (!labelsToApply || labelsToApply.trim() === '')) {
-      processingWaitingCount++;
-    }
-
-    if (status === 'Pending' && firstPendingIndex === -1) {
-      firstPendingIndex = i;
-    }
-  }
-
-  // Only promote if there are no Processing rows waiting for labels
-  // This prevents over-promoting when new emails arrive via real-time Flow
-  if (processingWaitingCount > 0) {
-    logAction('SYSTEM', 'PROMOTE_SKIP', `${processingWaitingCount} Processing row(s) still waiting for labels`);
-    return;
-  }
-
-  // Promote first Pending row
-  if (firstPendingIndex !== -1) {
-    sheet.getRange(firstPendingIndex + 2, 6).setValue('Processing');
-    logAction('SYSTEM', 'PROMOTE', `Row ${firstPendingIndex + 2} promoted to Processing`);
-
-    // Send outbound notification to Google Chat
-    notifyOldEmailReady();
-    return;
-  }
-
-  // No more Pending rows - queue is complete
-  notifyQueueComplete();
-  logAction('SYSTEM', 'COMPLETE', 'Queue processing complete');
-}
-
-/**
- * Processes all items in the queue that have labels filled in.
- * Processes from bottom to top to handle row deletions correctly.
- * Called via menu: Smart Call Time > Email Sorter > Process All Pending
- */
-function processAllPending() {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Queue');
-  if (!sheet) return;
-
-  const lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return;
-
-  const rateLimit = parseInt(getConfigValue('rate_limit_ms') || '3000');
-  let processed = 0;
-
-  // Process from bottom to top so row deletions don't affect indexes
-  for (let rowNum = lastRow; rowNum >= 2; rowNum--) {
-    const row = sheet.getRange(rowNum, 1, 1, 8).getValues()[0];
-    const labelsToApply = row[4];
-    const status = row[5];
-
-    // Process rows with labels that aren't errors
-    if (labelsToApply && labelsToApply.trim() !== '' && status !== 'Error') {
-      // Temporarily set to Processing so processQueueRow will handle it
-      sheet.getRange(rowNum, 6).setValue('Processing');
-      processQueueRow(rowNum);
-      processed++;
-
-      // Rate limiting
-      Utilities.sleep(rateLimit);
-    }
-  }
-
-  logAction('SYSTEM', 'BATCH', `Processed ${processed} items`);
-}
-
-/**
- * Clears the Queue sheet (keeps header).
- * Called via menu: Smart Call Time > Email Sorter > Clear Queue
- */
-function clearQueue() {
-  const ss = SpreadsheetApp.getActive();
-  const ui = SpreadsheetApp.getUi();
-  const sheet = ss.getSheetByName('Queue');
-
-  if (!sheet) return;
-
-  const response = ui.alert('Clear Queue',
-    'Are you sure you want to clear all items from the queue?',
-    ui.ButtonSet.YES_NO);
-
-  if (response === ui.Button.YES) {
-    const lastRow = sheet.getLastRow();
-    if (lastRow > 1) {
-      sheet.getRange(2, 1, lastRow - 1, 8).clear();
-    }
-    ui.alert('Queue Cleared', 'The queue has been cleared.', ui.ButtonSet.OK);
-    logAction('SYSTEM', 'CLEAR', 'Queue cleared');
-  }
-}
-
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
 /**
  * Parses a comma-separated string of labels.
+ *
  * @param {string} labelString - Comma-separated label names
  * @returns {string[]} Array of trimmed label names
  */
@@ -352,84 +334,67 @@ function parseLabelsString(labelString) {
 
   return labelString
     .split(',')
-    .map(l => l.trim())
-    .filter(l => l.length > 0 && l.toUpperCase() !== 'NONE');
+    .map(function(l) { return l.trim(); })
+    .filter(function(l) { return l.length > 0 && l.toUpperCase() !== 'NONE'; });
 }
 
 // ============================================================================
-// TIME-BASED QUEUE CHECKING
+// MANUAL MENU ACTIONS
 // ============================================================================
 
 /**
- * Checks the queue for rows ready to process.
- * Called by time-based trigger (every 15 minutes, or 30 seconds after processing).
- * Processes ALL rows that have Status="Processing" AND Labels filled.
- * Handles both old email (batch) and new email (real-time) flows.
+ * Manual menu action: Scans inbox and queues emails.
+ * Called via menu: Smart Call Time > Email Sorter > Scan Inbox Now
  */
-function checkQueueForProcessing() {
-  const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Queue');
+function scanInboxNow() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Queue');
+
+  if (!sheet) {
+    ui.alert('Error', 'Queue sheet not found. Run setup first.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var added = scanInboxForNewEmails(sheet);
+
+  if (added === 0) {
+    ui.alert('No New Emails', 'No new unlabeled emails found.', ui.ButtonSet.OK);
+    return;
+  }
+
+  ui.alert('Emails Queued',
+    'Added ' + added + ' new email(s) to the queue.\n\n' +
+    'They will be posted to Chat one at a time.',
+    ui.ButtonSet.OK);
+
+  // If nothing is currently Posted, post the first one now
+  if (!hasPostedRow(sheet)) {
+    postNextQueuedEmail(sheet);
+  }
+}
+
+/**
+ * Clears the Queue sheet (keeps header).
+ * Called via menu: Smart Call Time > Email Sorter > Clear Queue
+ */
+function clearQueue() {
+  var ss = SpreadsheetApp.getActive();
+  var ui = SpreadsheetApp.getUi();
+  var sheet = ss.getSheetByName('Queue');
+
   if (!sheet) return;
 
-  const lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return; // No data rows
+  var response = ui.alert('Clear Queue',
+    'Are you sure you want to clear all items from the queue?',
+    ui.ButtonSet.YES_NO);
 
-  // Find ALL rows with Status = "Processing" AND Labels to Apply is filled
-  const data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
-  const rateLimit = parseInt(getConfigValue('rate_limit_ms') || '3000');
-
-  // Collect rows to process (process from bottom to top due to row deletion)
-  const rowsToProcess = [];
-  for (let i = 0; i < data.length; i++) {
-    const labelsToApply = data[i][4]; // Column E
-    const status = data[i][5]; // Column F
-
-    if (status === 'Processing' && labelsToApply && labelsToApply.trim() !== '') {
-      rowsToProcess.push(i + 2); // Row number (1-indexed, skip header)
+  if (response === ui.Button.YES) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      sheet.deleteRows(2, lastRow - 1);
     }
+    ui.alert('Queue Cleared', 'The queue has been cleared.', ui.ButtonSet.OK);
+    logAction('SYSTEM', 'CLEAR', 'Queue cleared');
   }
-
-  // Process from bottom to top so row deletions don't affect indices
-  rowsToProcess.sort((a, b) => b - a);
-
-  let processedCount = 0;
-  for (const rowNum of rowsToProcess) {
-    processQueueRow(rowNum);
-    processedCount++;
-
-    // Rate limiting between rows
-    if (processedCount < rowsToProcess.length) {
-      Utilities.sleep(rateLimit);
-    }
-  }
-
-  // If we processed something, schedule a quick follow-up check
-  if (processedCount > 0) {
-    logAction('SYSTEM', 'BATCH_CHECK', `Processed ${processedCount} row(s)`);
-    scheduleQuickCheck();
-  }
-}
-
-/**
- * Schedules a one-time trigger to run checkQueueForProcessing in 30 seconds.
- * Cleans up old quick-check triggers first to avoid buildup.
- */
-function scheduleQuickCheck() {
-  // Clean up any existing quick-check triggers
-  const triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach(trigger => {
-    if (trigger.getHandlerFunction() === 'checkQueueForProcessing' &&
-        trigger.getTriggerSource() === ScriptApp.TriggerSource.CLOCK &&
-        trigger.getEventType() === ScriptApp.EventType.CLOCK) {
-      // Check if it's a one-time trigger (not the 15-minute recurring one)
-      // One-time triggers created with .after() don't have a specific way to identify them
-      // So we'll just let them run and not delete them
-    }
-  });
-
-  // Create a one-time trigger for 30 seconds from now
-  ScriptApp.newTrigger('checkQueueForProcessing')
-    .timeBased()
-    .after(30 * 1000) // 30 seconds in milliseconds
-    .create();
 }

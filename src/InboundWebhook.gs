@@ -60,6 +60,10 @@ function doPost(e) {
       return handleTestSheetsChatComplete(data);
     }
 
+    if (data.action === 'apply_labels') {
+      return handleApplyLabels(data);
+    }
+
     if (data.action === 'update_labels') {
       return handleLabelUpdate(data);
     }
@@ -202,6 +206,41 @@ function handleLabelUpdate(data) {
 
   } catch (error) {
     logAction('WEBHOOK', 'ERROR', 'handleLabelUpdate: ' + error.message);
+    return jsonResponse({ success: false, error: error.message });
+  }
+}
+
+/**
+ * Handles the new apply_labels action from the Hub timer-based dispatch.
+ * Hub sends: { action: "apply_labels", emailId, labels, chatMessageName, fromHub, timestamp }
+ *
+ * This function:
+ * 1. Applies Gmail labels to the email
+ * 2. Posts CONFIRM_COMPLETE to Chat (tells Hub cleanup is safe)
+ * 3. Deletes the Queue row
+ * 4. Posts the next Queued email to Chat
+ *
+ * @param {Object} data - Webhook payload
+ * @returns {TextOutput} JSON response
+ */
+function handleApplyLabels(data) {
+  var emailId = data.emailId;
+  var labels = data.labels;
+
+  if (!emailId) {
+    return jsonResponse({ success: false, error: 'No emailId provided' });
+  }
+
+  if (!labels) {
+    return jsonResponse({ success: false, error: 'No labels provided' });
+  }
+
+  try {
+    var result = applyLabelsAndAdvanceQueue(emailId, labels);
+    return jsonResponse(result);
+
+  } catch (error) {
+    logAction('WEBHOOK', 'ERROR', 'handleApplyLabels: ' + error.message);
     return jsonResponse({ success: false, error: error.message });
   }
 }

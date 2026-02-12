@@ -121,29 +121,31 @@ function hubJsonResponse(data) {
  * Handles messages sent to the Chat app.
  * Called directly by Chat (Apps Script project mode) or via doPost (HTTP endpoint mode).
  *
- * Message types handled:
- * - REGISTER: User instance requesting registration
- * - UNREGISTER: User instance requesting unregistration
- * - CONFIRM_COMPLETE: User confirms labels applied, Hub cleans up
- * - SHEETS_CHAT_TEST / CONFIRMED: Test flow messages
- * - EMAIL_READY / QUEUE_STARTED / QUEUE_COMPLETE: Status messages
- * - Labels: AI responses routed to user webhooks
+ * In the timer-based architecture, most message processing is handled by
+ * hubTimerProcess() in TimerProcessor.gs. This onMessage handler serves as
+ * a lightweight fallback for real-time responses when the Hub is configured
+ * as a Chat App (Apps Script project mode or HTTP endpoint mode).
+ *
+ * It logs incoming messages and handles a few cases that benefit from
+ * immediate response (REGISTER, UNREGISTER, tests). The heavy lifting
+ * (EMAIL_READY reactions, CONFIRM_COMPLETE cleanup, label dispatch) is
+ * done by the 5-minute timer.
  *
  * @param {Object} event - Chat event object
  * @returns {Object} Response message
  */
 function onMessage(event) {
   try {
-    const message = event.message.text;
-    const sender = event.user.email || event.user.displayName;
-    const messageName = event.message.name; // Track for cleanup
+    var message = event.message.text;
+    var sender = event.user.email || event.user.displayName;
+    var messageName = event.message.name;
 
     logHub('MESSAGE_RECEIVED', 'From: ' + sender + ', Message: ' + message.substring(0, 100) + '...');
 
-    const parsed = parseMessage(message);
-    const msgType = getMessageType(parsed.labels);
+    var parsed = parseMessage(message);
+    var msgType = getMessageType(parsed.labels);
 
-    // Handle REGISTER messages - user instance wants to register
+    // Handle REGISTER messages immediately for faster feedback
     if (parsed.instanceName && msgType === 'REGISTER') {
       var regResult = handleChatRegistration(parsed, message, messageName);
       if (regResult.success) {
@@ -152,7 +154,7 @@ function onMessage(event) {
       return { text: 'Registration failed: ' + regResult.error };
     }
 
-    // Handle UNREGISTER messages
+    // Handle UNREGISTER messages immediately
     if (parsed.instanceName && msgType === 'UNREGISTER') {
       var unregResult = handleChatUnregistration(parsed, messageName);
       if (unregResult.success) {
@@ -161,25 +163,7 @@ function onMessage(event) {
       return { text: 'Unregister failed: ' + unregResult.error };
     }
 
-    // Handle CONFIRM_COMPLETE messages - user confirms labels were applied
-    if (parsed.instanceName && msgType === 'CONFIRM_COMPLETE') {
-      var completeResult = handleChatConfirmComplete(parsed, messageName);
-      if (completeResult.success) {
-        return { text: parsed.instanceName + ': Confirmed. ' + (completeResult.deleted || 0) + ' messages cleaned up.' };
-      }
-      return { text: 'Confirm complete failed: ' + completeResult.error };
-    }
-
-    // Handle CONFIRMED messages - user confirmed a test, delete tracked messages
-    if (parsed.instanceName && msgType === 'CONFIRMED') {
-      var confirmResult = handleConfirmedMessage(parsed, messageName);
-      if (confirmResult.success) {
-        return { text: parsed.instanceName + ': Confirmed. ' + (confirmResult.deleted || 0) + ' messages cleaned up.' };
-      }
-      return { text: 'Confirm handling failed: ' + confirmResult.error };
-    }
-
-    // Handle test chat messages (both legacy TEST_CHAT_CONNECTION and new SHEETS_CHAT_TEST)
+    // Handle test messages immediately for faster feedback
     if (parsed.instanceName && isTestChatLabels(parsed.labels)) {
       var testResult = handleTestChatMessage(parsed, messageName);
       if (testResult.success) {
@@ -188,37 +172,26 @@ function onMessage(event) {
       return { text: 'Test chat connection failed: ' + testResult.error };
     }
 
-    // Handle system/status messages (QUEUE_STARTED, QUEUE_COMPLETE, EMAIL_READY) - log them
-    if (parsed.instanceName && msgType && isSystemMessage(msgType)) {
-      logHub('STATUS_MESSAGE', parsed.instanceName + ': ' + msgType);
-
-      // Track EMAIL_READY messages for later cleanup
-      if (msgType === 'EMAIL_READY' && messageName) {
-        var emailId = parsed.emailId || '';
-        if (emailId) {
-          createPendingRequest(parsed.instanceName, emailId, {
-            type: 'email_ready',
-            messageNames: [messageName],
-            startedAt: new Date().toISOString()
-          });
-        }
+    // Handle CONFIRMED messages (test round-trip) immediately
+    if (parsed.instanceName && msgType === 'CONFIRMED') {
+      var confirmResult = handleConfirmedMessage(parsed, messageName);
+      if (confirmResult.success) {
+        return { text: parsed.instanceName + ': Confirmed. ' + (confirmResult.deleted || 0) + ' messages cleaned up.' };
       }
-
-      return { text: 'Status received: ' + parsed.instanceName + ' ' + msgType };
+      return { text: 'Confirm handling failed: ' + confirmResult.error };
     }
 
-    // Parse the AI response to extract labels and target user
-    var routeResult = routeMessage(message, sender);
-
-    if (routeResult.success) {
-      // Track this AI response message for later cleanup
-      if (messageName && routeResult.instanceName) {
-        appendMessageToPending(routeResult.instanceName, messageName);
-      }
-      return { text: 'Routed to ' + routeResult.instanceName + ': ' + routeResult.labels };
-    } else {
-      return { text: 'Could not route message: ' + routeResult.error };
+    // All other messages (EMAIL_READY, CONFIRM_COMPLETE, label responses)
+    // are handled by the 5-minute timer in TimerProcessor.gs.
+    // Just log and acknowledge.
+    if (parsed.instanceName && msgType) {
+      logHub('MESSAGE_QUEUED', parsed.instanceName + ': ' + msgType + ' (will be processed by timer)');
+      return { text: 'Received: ' + parsed.instanceName + ' ' + msgType + '. Will be processed on next timer cycle.' };
     }
+
+    // Unknown message — log it
+    logHub('MESSAGE_UNKNOWN', 'Unrecognized message from ' + sender);
+    return { text: 'Message received. Will be processed on next timer cycle.' };
 
   } catch (error) {
     logHub('MESSAGE_ERROR', error.message);
