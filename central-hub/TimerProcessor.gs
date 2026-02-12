@@ -15,7 +15,8 @@
  *
  * Dependencies:
  *   - ChatManager.gs: listChatMessages(), addReactionToMessage(), messageHasReaction(),
- *                      deleteChatMessages()
+ *                      deleteChatMessages(), trackReactedMessage(), isMessageReacted(),
+ *                      removeReactedMessage(), cleanupReactedTracking()
  *   - MessageRouter.gs: parseChatMessage(), sendWebhookToUser(), MESSAGE_TYPES,
  *                        handleTestChatMessage(), handleSheetsChatTest()
  *   - EmailLabelingQueue.gs: getPendingLabelResults(), findLabelingResult(),
@@ -70,6 +71,7 @@ function hubTimerProcess() {
     // Step 5: Clean up old completed entries
     cleanupOldLabelingEntries();
     cleanupPendingRequests();
+    cleanupReactedTracking();
 
   } catch (error) {
     logHub('TIMER_ERROR', 'Unhandled error: ' + error.message);
@@ -125,8 +127,15 @@ function parseAllMessages(rawMessages) {
       result.closed.push(parsed);
     } else if (parsed.type === MESSAGE_TYPES.EMAIL_READY && parsed.status !== 'closed') {
       // Only include EMAIL_READY that haven't been reacted to yet
-      if (!messageHasReaction(msg)) {
+      // Dual-check: Chat API reaction data AND our own ScriptProperties tracking
+      var hasApiReaction = messageHasReaction(msg);
+      var hasTrackedReaction = isMessageReacted(msg.name);
+      if (!hasApiReaction && !hasTrackedReaction) {
         result.ready.push(parsed);
+      } else {
+        logHub('SKIP_REACTED', parsed.user + '/' + (parsed.conversationId || 'unknown') +
+          ' already reacted (api=' + hasApiReaction + ', tracked=' + hasTrackedReaction +
+          ', msg=' + msg.name + ')');
       }
     } else if (parsed.type === MESSAGE_TYPES.TEST_CHAT_CONNECTION ||
                parsed.type === MESSAGE_TYPES.SHEETS_CHAT_TEST) {
@@ -239,6 +248,12 @@ function handleClosedConversations(closedMessages, allMessages) {
     // Delete all tracked Chat messages for this conversation
     if (messagesToDelete.length > 0) {
       var deleteResult = deleteChatMessages(messagesToDelete);
+
+      // Clean up reaction tracking for deleted messages
+      for (var m = 0; m < messagesToDelete.length; m++) {
+        removeReactedMessage(messagesToDelete[m]);
+      }
+
       logHub('CLOSED_CLEANUP', closed.user + '/' + closed.conversationId +
         ': deleted ' + deleteResult.deleted + ' messages');
     }
@@ -298,10 +313,18 @@ function handleReadyMessages(readyMessages) {
     // Add ✅ emoji reaction — this triggers the Google Flow
     var result = addReactionToMessage(parsed.messageName);
 
-    if (result.success && !result.alreadyExists) {
-      reactedCount++;
-      logHub('TIMER_REACT', 'Added ✅ to ' + parsed.user + '/' +
-        (parsed.conversationId || 'unknown') + ' (' + parsed.messageName + ')');
+    if (result.success) {
+      // Always track the reaction so future cycles skip this message
+      trackReactedMessage(parsed.messageName);
+
+      if (!result.alreadyExists) {
+        reactedCount++;
+        logHub('TIMER_REACT', 'Added ✅ to ' + parsed.user + '/' +
+          (parsed.conversationId || 'unknown') + ' (' + parsed.messageName + ')');
+      } else {
+        logHub('TIMER_REACT_SKIP', 'Already had ✅: ' + parsed.user + '/' +
+          (parsed.conversationId || 'unknown') + ' (' + parsed.messageName + ') — now tracked');
+      }
     }
   }
 

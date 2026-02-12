@@ -255,6 +255,93 @@ function messageHasReaction(message, emoji) {
 }
 
 // ============================================================================
+// REACTION TRACKING (ScriptProperties-based)
+// ============================================================================
+
+/**
+ * Tracks that a ✅ reaction has been added to a message.
+ * Uses ScriptProperties as persistent storage so the Hub remembers
+ * which messages it already reacted to, even if the Chat API's
+ * emojiReactionSummaries field is not populated in list responses.
+ *
+ * Property key: "reacted:{messageName}"
+ * Property value: ISO timestamp of when the reaction was added
+ *
+ * @param {string} messageName - Full message name (e.g., "spaces/xxx/messages/yyy")
+ */
+function trackReactedMessage(messageName) {
+  if (!messageName) return;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    props.setProperty('reacted:' + messageName, new Date().toISOString());
+  } catch (error) {
+    logHub('TRACK_REACT_ERROR', messageName + ': ' + error.message);
+  }
+}
+
+/**
+ * Checks if a message has been tracked as already reacted to.
+ *
+ * @param {string} messageName - Full message name
+ * @returns {boolean} True if the message has been tracked as reacted
+ */
+function isMessageReacted(messageName) {
+  if (!messageName) return false;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    return props.getProperty('reacted:' + messageName) !== null;
+  } catch (error) {
+    logHub('CHECK_REACT_ERROR', messageName + ': ' + error.message);
+    return false;
+  }
+}
+
+/**
+ * Removes reaction tracking for a message (called when message is deleted).
+ *
+ * @param {string} messageName - Full message name
+ */
+function removeReactedMessage(messageName) {
+  if (!messageName) return;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    props.deleteProperty('reacted:' + messageName);
+  } catch (error) {
+    logHub('REMOVE_REACT_ERROR', messageName + ': ' + error.message);
+  }
+}
+
+/**
+ * Cleans up stale reaction tracking entries older than 1 hour.
+ * Messages should be cleaned up well before then via handleClosedConversations().
+ * This prevents unbounded growth of script properties.
+ */
+function cleanupReactedTracking() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var all = props.getProperties();
+    var cutoff = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+    var removed = 0;
+
+    for (var key in all) {
+      if (key.indexOf('reacted:') === 0) {
+        var timestamp = new Date(all[key]);
+        if (timestamp < cutoff) {
+          props.deleteProperty(key);
+          removed++;
+        }
+      }
+    }
+
+    if (removed > 0) {
+      logHub('REACT_TRACKING_CLEANUP', 'Removed ' + removed + ' stale tracking entries');
+    }
+  } catch (error) {
+    logHub('REACT_CLEANUP_ERROR', error.message);
+  }
+}
+
+// ============================================================================
 // STATUS MESSAGES
 // ============================================================================
 
