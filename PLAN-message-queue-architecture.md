@@ -9,46 +9,167 @@ The system is shifting from a Google Flow-triggered model to a **timer-driven po
 
 ---
 
-## New Data Flow (End-to-End Loop)
+## Complete Message Flow: Start to Finish
+
+Here is every step a single email goes through, from discovery to cleanup.
+
+### Step 1 — User: Inbox Scan (15-min timer)
+- `checkInboxAndPostNext()` runs on the user sheet
+- Searches Gmail for unlabeled emails (`has:nouserlabels`)
+- Adds any NEW emails to the local Queue sheet with Status = `Queued`
+- If no email currently has Status = `Posted`, takes the **top** `Queued` row
+
+### Step 2 — User: Post to Chat
+- Builds the `EMAIL_READY` message with the consistent format:
+  ```
+  @{instanceName}:[{emailId}] EMAIL_READY
+
+  ===== AVAILABLE LABELS =====
+  Label1: description
+  Label2: description
+
+  ===== EMAIL TO CATEGORIZE =====
+  Email ID: {emailId}
+  Subject: {subject}
+  From: {from}
+  Date: {date}
+
+  {email body}
+  ```
+- Posts to the shared Chat space via `chat_webhook_url`
+- Updates that Queue row's Status from `Queued` → `Posted`
+- **Only ONE email is `Posted` at a time** — the rest wait as `Queued`
+
+### Step 3 — Hub: Timer Fires (5-min timer)
+- `hubTimerProcess()` runs and does the following **in order**:
+
+#### Step 3a — Scan for Registration Messages
+- Lists recent messages in the Chat space via `Chat.Spaces.Messages.list()`
+- Finds any messages containing `REGISTER`
+- Processes registration (same as current `handleChatRegistration`)
+- Tracks message names in Pending sheet for later cleanup
+
+#### Step 3b — Scan for Confirmation Messages
+- Finds messages containing `CONFIRMED` or `CONFIRM_COMPLETE`
+- Looks up associated pending requests by instance name + conversation ID
+- **Deletes the related Chat messages** (the original + the confirmation)
+- Removes the pending request entry
+
+#### Step 3c — Scan for EMAIL_READY Messages & Add Emoji
+- Finds messages containing `EMAIL_READY` that **don't already have a ✅ reaction**
+- Adds ✅ emoji reaction to **ALL** ready messages (can batch multiple in one pass)
+- Each emoji reaction independently triggers the Google Flow
+- Uses `Chat.Spaces.Messages.reactions.create()` API
+
+### Step 4 — Google Flow: Triggered by ✅ Emoji
+- Flow trigger: emoji reaction (✅) added to a message in the Chat space
+- Flow reads the message content that was reacted to
+- Flow parses out:
+  - **Instance Name** (from `@instanceName:` header)
+  - **Email ID** (from `[emailId]` in header)
+  - **Email contents** (subject, from, body from message body)
+  - **Labels array + descriptions** (from AVAILABLE LABELS section)
+
+### Step 5 — Gemini: Assigns Label
+- Flow sends the email contents + available labels to Gemini
+- Gemini responds with the assigned label(s)
+
+### Step 6 — Flow: Writes Result to Hub Sheet
+- Flow writes a row to the Hub's **"Emails Ready for Labeling"** sheet:
+  | Email ID | Instance Name | Assigned Label(s) | Chat Message Name | Status | Created At |
+  |----------|--------------|-------------------|-------------------|--------|------------|
+  | abc123   | john_doe     | Work, Important   | spaces/X/messages/Y | new  | timestamp  |
+- The Chat Message Name comes from the message that was reacted to — **this is preserved for cleanup later**
+
+### Step 7 — Hub: Dispatch Label Results (same timer pass or next)
+- `dispatchLabelResults()` runs (part of `hubTimerProcess()`, or called immediately after Step 3c)
+- Reads all rows in "Emails Ready for Labeling" with Status = `new`
+- For **each** row:
+  1. Looks up the user's webhook URL from the Registry sheet by Instance Name
+  2. Sends webhook to the user:
+     ```json
+     {
+       "action": "apply_labels",
+       "emailId": "abc123",
+       "labels": "Work, Important",
+       "chatMessageName": "spaces/X/messages/Y",
+       "fromHub": true,
+       "timestamp": "2026-02-12T10:30:00Z"
+     }
+     ```
+  3. Marks the row Status → `dispatched`, records Dispatched At timestamp
+- **Processes ALL pending rows in one pass** — does not wait for the next timer cycle
+
+### Step 8 — User: Receives Webhook & Applies Labels
+- User's `doGet()` (or `doPost()`) receives the webhook
+- `handleLabelWebhook()`:
+  1. Finds the Queue row matching the Email ID
+  2. Calls `applyLabelsToEmail(emailId, labels)` — applies Gmail labels
+  3. Deletes the Queue row (email is done)
+  4. Returns success response to Hub:
+     ```json
+     {
+       "success": true,
+       "emailId": "abc123",
+       "labelsApplied": ["Work", "Important"]
+     }
+     ```
+
+### Step 9 — User: Posts Next Email
+- Immediately after labeling (in the same webhook handler, not waiting for timer):
+  - Calls `processNextInQueue()`
+  - Finds the next `Queued` row in the Queue sheet
+  - If found: posts it to Chat (back to Step 2), sets Status → `Posted`
+  - If none: queue is empty, waits for next 15-min timer to discover new emails
+
+### Step 10 — Hub: Chat Message Cleanup
+- **This is the step that was missing from the original plan**
+- On the next timer pass (or immediately after receiving success webhook response):
+  - Hub checks "Emails Ready for Labeling" for rows with Status = `dispatched`
+  - For each dispatched row:
+    1. Uses the stored **Chat Message Name** to **delete the original EMAIL_READY message** from the Chat space via `deleteChatMessages([chatMessageName])`
+    2. Marks the row Status → `completed`
+  - `cleanupOldEntries()` removes completed rows older than 24h
+
+### Complete — Cycle Repeats
+- The user's next email (from Step 9) is now sitting in Chat
+- Hub's next 5-min timer picks it up at Step 3c
+- The cycle continues until all emails are processed
+
+---
+
+## Flow Diagram (Updated with Cleanup)
 
 ```
 USER (15min timer)                    CHAT SPACE                         HUB (5min timer)
 ─────────────────                    ──────────                         ────────────────
-1. Check inbox for                        │
-   unlabeled emails                       │
-2. Add to local Queue sheet               │
-3. Post TOP email to Chat  ──────►  [Message appears]                        │
+1. Scan inbox, add to Queue               │
+2. Post TOP email to Chat  ──────►  [Message appears]                        │
                                           │                                   │
-                                          │                    4. Scan for new messages
-                                          │                    5. Scan for registration msgs
-                                          │                    6. Scan for confirmation msgs
-                                          │                       (delete associated messages)
-                                          │                    7. Add ✅ emoji to ready    ◄───┐
-                                     [✅ emoji added]             messages (can be multiple) │
-                                          │                                   │               │
-                                          │              8. ✅ triggers Google Flow           │
-                                          │                    Flow extracts:                  │
-                                          │                    - User (instance name)          │
-                                          │                    - Message ID (Chat msg name)    │
-                                          │                    - Email contents                │
-                                          │                    - Labels array + descriptions   │
-                                          │                                   │               │
-                                          │              9. Gemini assigns label               │
-                                          │                                   │               │
-                                          │              10. Flow writes to "Emails Ready     │
-                                          │                   for Labeling" sheet on Hub       │
-                                          │                                   │               │
-                                          │              11. Hub sees new rows, looks up       │
-                                          │                   user webhook from Registry       │
-                                          │                                   │               │
-USER                                      │              12. Hub sends webhook to user ────────┘
-─────                                     │                   (immediately, no timer wait)
-13. doGet receives webhook                │
-14. Label the email in Gmail              │
-15. Move queue up one                     │
-16. Post NEXT email to Chat  ──────►  [Next message]
+                                          │                    3a. Scan for registration msgs
+                                          │                    3b. Scan for confirmation msgs
+                                          │                        → delete associated messages
+                                          │                    3c. Add ✅ to EMAIL_READY msgs
+                                     [✅ emoji added]              (can be multiple at once)
+                                          │                                   │
+                                          │              4. ✅ triggers Google Flow
+                                          │              5. Gemini assigns label
+                                          │              6. Flow writes to Hub labeling sheet
+                                          │                   (includes Chat Message Name)
+                                          │                                   │
+                                          │              7. Hub dispatches webhook to user
+                                          │                                   │
+8. Receive webhook                        │                                   │
+9. Apply labels to Gmail                  │                                   │
+10. Delete Queue row                      │                                   │
+11. Return success to Hub                 │                                   │
+                                          │              ┌─── 12. Hub receives success
+12. Post NEXT email to Chat ──────► [Next msg]           │    13. Delete original EMAIL_READY
+                                          │              │        message from Chat space
+                                          │              │    14. Mark labeling row completed
+                                          │              └─── 15. Clean up old completed rows
                                           │
-                              (cycle repeats from step 4)
+                              (cycle repeats from step 3c)
 ```
 
 ---
@@ -66,18 +187,19 @@ USER                                      │              12. Hub sends webhook
 
 | Stage | Data Available | Key ID |
 |-------|---------------|--------|
-| User queues email | Email ID, Subject, From, Body | Email ID |
-| User posts to Chat | Email ID embedded in message header `@user:[emailId]` | Email ID |
-| Hub scans Chat | Chat Message Name + parsed Email ID from header | Both |
-| Hub adds ✅ emoji | Chat Message Name (needed for API call) | Message Name |
-| Flow triggers on ✅ | Chat Message Name, parses Email ID from message body | Both |
-| Flow writes to Hub sheet | Email ID, User, Labels, Chat Message Name | Email ID |
-| Hub sends webhook to user | Email ID, Labels | Email ID |
-| User labels email | Email ID (to find in Gmail + Queue sheet) | Email ID |
+| 1. User queues email | Email ID, Subject, From, Body | Email ID |
+| 2. User posts to Chat | Email ID embedded in header `@user:[emailId]` | Email ID |
+| 3c. Hub scans Chat | Chat Message Name + parsed Email ID from header | Both |
+| 3c. Hub adds ✅ emoji | Chat Message Name (needed for reaction API call) | Message Name |
+| 4. Flow triggers on ✅ | Chat Message Name + parses Email ID from message body | Both |
+| 6. Flow writes to Hub sheet | Email ID, Instance Name, Labels, Chat Message Name | Both |
+| 7. Hub sends webhook to user | Email ID, Labels, Chat Message Name | Email ID |
+| 8-9. User applies labels | Email ID (to find in Gmail + Queue) | Email ID |
+| 10. Hub cleans up Chat | Chat Message Name (from labeling sheet) | Message Name |
 
-**The Hub's "Emails Ready for Labeling" sheet should store both:**
-- Email ID (for routing back to user)
-- Chat Message Name (for later cleanup/deletion of the Chat message)
+**The Hub's "Emails Ready for Labeling" sheet stores both:**
+- Email ID (for routing labels back to the correct user/email)
+- Chat Message Name (for deleting the Chat message after processing)
 
 ---
 
@@ -85,13 +207,13 @@ USER                                      │              12. Hub sends webhook
 
 | Data Point | Created At | Needed At | How It Travels |
 |------------|-----------|-----------|----------------|
-| **Email ID** | User inbox scan | User label application | Embedded in Chat message header `@user:[emailId]`, parsed by Flow, written to Hub sheet, sent in webhook |
-| **Instance Name** | User config | Hub webhook dispatch | Embedded in Chat message header `@user:[emailId]`, parsed by Flow, written to Hub sheet |
-| **Chat Message Name** | When posted to Chat | Hub emoji reaction + cleanup | Stored in Hub's labeling queue sheet |
-| **Email Contents** | User inbox scan | Gemini classification | Embedded in Chat message body |
-| **Labels + Descriptions** | User's Labels sheet | Gemini classification | Embedded in Chat message body |
-| **Assigned Label** | Gemini response | User label application | Written to Hub sheet, sent in webhook |
-| **User Webhook URL** | Registration | Hub dispatches results | Stored in Hub Registry sheet |
+| **Email ID** | Step 1 (inbox scan) | Step 9 (label application) | Embedded in Chat message header `@user:[emailId]`, parsed by Flow, written to Hub sheet, sent in webhook back to user |
+| **Instance Name** | User config | Step 7 (Hub webhook dispatch) | Embedded in Chat message header, parsed by Flow, written to Hub sheet, used to look up webhook URL |
+| **Chat Message Name** | Step 2 (posted to Chat) | Step 10 (Hub cleanup) | Available from Chat API when Hub lists/reads messages, written to Hub labeling sheet by Flow, used to delete message after completion |
+| **Email Contents** | Step 1 (inbox scan) | Step 5 (Gemini classification) | Embedded in Chat message body, read by Flow when ✅ triggers |
+| **Labels + Descriptions** | User's Labels sheet | Step 5 (Gemini classification) | Embedded in Chat message body (AVAILABLE LABELS section) |
+| **Assigned Label** | Step 5 (Gemini response) | Step 9 (user label application) | Written to Hub labeling sheet by Flow, sent to user via webhook |
+| **User Webhook URL** | Registration | Step 7 (Hub dispatches results) | Stored in Hub Registry sheet, looked up by Instance Name |
 
 ---
 
@@ -121,12 +243,15 @@ function hubTimerProcess() {
   // Step 4: Check "Emails Ready for Labeling" sheet for new results
   //         Send webhooks to users for each result (all at once, no waiting)
   dispatchLabelResults();
+
+  // Step 5: Clean up processed Chat messages
+  cleanupProcessedMessages();
 }
 ```
 
 **Sub-functions:**
 
-- `scanForRegistrationMessages()`: Uses Chat API `spaces.messages.list()` to find messages containing "REGISTER". Processes registration (same as current `handleChatRegistration`).
+- `scanForRegistrationMessages()`: Uses Chat API `spaces.messages.list()` to find messages containing "REGISTER". Processes registration (same as current `handleChatRegistration`). Tracks message names in Pending sheet for later cleanup.
 
 - `scanForConfirmationMessages()`: Finds messages containing "CONFIRMED" or "CONFIRM_COMPLETE". Looks up associated pending requests. Deletes the related Chat messages. Cleans up pending requests.
 
@@ -139,10 +264,18 @@ function hubTimerProcess() {
 
 - `dispatchLabelResults()`:
   - Reads "Emails Ready for Labeling" sheet
-  - For each row: look up user in Registry, send webhook with labels
+  - For each row with Status = `new`: look up user in Registry, send webhook with labels
   - Can process ALL pending rows in one pass (no waiting for next timer)
-  - Mark rows as "Dispatched" after sending webhook
-  - Delete dispatched rows after confirmation (or on next timer pass)
+  - Mark rows as `dispatched` after sending webhook
+  - If the webhook response confirms success immediately, can proceed to cleanup in the same pass
+
+- **`cleanupProcessedMessages()` (the missing piece):**
+  - Reads "Emails Ready for Labeling" sheet for rows with Status = `dispatched`
+  - For each row:
+    1. Uses the stored Chat Message Name to call `deleteChatMessages([chatMessageName])`
+    2. Marks the row Status → `completed`
+  - Calls `cleanupOldEntries()` to remove completed rows older than 24h
+  - This keeps the Chat space clean — processed EMAIL_READY messages are deleted after labels are applied
 
 ---
 
@@ -156,17 +289,18 @@ function hubTimerProcess() {
 | A | Email ID |
 | B | Instance Name (user) |
 | C | Assigned Label(s) |
-| D | Chat Message Name (for cleanup) |
-| E | Status (new / dispatched / completed) |
+| D | Chat Message Name (for cleanup/deletion) |
+| E | Status (`new` / `dispatched` / `completed`) |
 | F | Created At |
 | G | Dispatched At |
 
 **Functions:**
-- `addLabelingResult(emailId, instanceName, labels, chatMessageName)` — Called by Google Flow after Gemini assigns labels
-- `getPendingResults()` — Returns all rows with Status = "new"
-- `markDispatched(emailId)` — After webhook sent
-- `markCompleted(emailId)` — After user confirms labeling done
-- `cleanupOldEntries()` — Remove completed entries older than 24h
+- `addLabelingResult(emailId, instanceName, labels, chatMessageName)` — Called by Google Flow after Gemini assigns labels. Status = `new`.
+- `getPendingResults()` — Returns all rows with Status = `new`
+- `getDispatchedResults()` — Returns all rows with Status = `dispatched` (for cleanup)
+- `markDispatched(emailId)` — After webhook sent successfully
+- `markCompleted(emailId)` — After Chat message deleted successfully
+- `cleanupOldEntries()` — Remove `completed` entries older than 24h
 
 ---
 
@@ -194,11 +328,13 @@ function hubTimerProcess() {
   function listMessages(spaceId, pageSize) {
     const url = "https://chat.googleapis.com/v1/" + spaceId + "/messages?pageSize=" + (pageSize || 50);
     // Use Chat API to list recent messages
-    // Returns array of message objects with name, text, createTime, etc.
+    // Returns array of message objects with name, text, createTime, reactions, etc.
   }
   ```
-- `getMessageReactions(messageName)` — Check if a message already has ✅
-- Keep existing: `sendMessage()`, `deleteMessage()`
+- `getMessageReactions(messageName)` — Check if a message already has ✅ (to avoid double-reacting)
+- Keep existing: `sendMessage()`, `deleteMessage()`, `deleteChatMessages()`, `sendCompletionToChat()`
+
+**Note on `deleteChatMessages()`:** This existing function already handles the deletion logic. The new `cleanupProcessedMessages()` in TimerProcessor calls it with the Chat Message Names from the labeling queue sheet. No changes needed to the delete logic itself — just a new caller.
 
 ---
 
@@ -208,9 +344,10 @@ function hubTimerProcess() {
 
 **New behavior:**
 - The real-time `onMessage()` routing is largely replaced by timer-based polling
-- `parseMessage()` still needed (used by TimerProcessor when scanning messages)
+- `parseMessage()` still needed (used by TimerProcessor when scanning listed messages)
 - `routeLabelsToUser()` replaced by `dispatchLabelResults()` in TimerProcessor
-- Keep parsing logic, remove real-time routing logic
+- `sendWebhookToUser()` still needed (called by TimerProcessor dispatch)
+- Keep parsing logic + webhook sending, remove real-time routing orchestration
 - May keep `onMessage()` as a fallback or for future use, but primary path is timer-based
 
 ---
@@ -231,7 +368,7 @@ function hubTimerProcess() {
 
 ## Hub Module 6: `HubSetup.gs` (MINOR CHANGES)
 
-- Add creation of "Emails Ready for Labeling" sheet
+- Add creation of "Emails Ready for Labeling" sheet (7 columns, headers, frozen row)
 - Add 5-minute timer trigger setup
 - Update menu with new admin options
 
@@ -239,8 +376,8 @@ function hubTimerProcess() {
 
 ## Hub Module 7: `PendingRequests.gs` (MINOR CHANGES)
 
-- May be simplified since the "Emails Ready for Labeling" sheet takes over some tracking
-- Still useful for tracking registration conversations and cleanup
+- May be simplified since the "Emails Ready for Labeling" sheet takes over email tracking
+- Still useful for tracking registration conversations and test message cleanup
 - Add: tracking of which messages have been reacted to (to avoid double-✅)
 
 ---
@@ -256,7 +393,7 @@ function hubTimerProcess() {
 2. Extract message content from the reacted message
 3. Parse out: Instance Name, Email ID, Email contents, Labels array + descriptions
 4. Send to Gemini for label assignment
-5. Write result to Hub's "Emails Ready for Labeling" sheet via Apps Script web app call or direct sheet write
+5. Write result to Hub's "Emails Ready for Labeling" sheet (including Chat Message Name for later cleanup)
 
 **Note:** This is configured in Google Workspace/Chat Flow UI, not in Apps Script. The plan here documents what the Flow needs to do.
 
@@ -275,13 +412,13 @@ function hubTimerProcess() {
 
 | File | Change Level | Key Changes |
 |------|-------------|-------------|
-| **NEW** `central-hub/TimerProcessor.gs` | **NEW** | 5-min timer: scan, react, dispatch |
-| **NEW** `central-hub/EmailLabelingQueue.gs` | **NEW** | "Emails Ready for Labeling" sheet CRUD |
-| `central-hub/ChatManager.gs` | **MAJOR** | Add reactions, list messages, check reactions |
-| `central-hub/MessageRouter.gs` | **MODERATE** | Decouple from real-time, support polling |
+| **NEW** `central-hub/TimerProcessor.gs` | **NEW** | 5-min timer: scan, react, dispatch, **cleanup Chat messages** |
+| **NEW** `central-hub/EmailLabelingQueue.gs` | **NEW** | "Emails Ready for Labeling" sheet CRUD with `dispatched` → `completed` lifecycle |
+| `central-hub/ChatManager.gs` | **MAJOR** | Add `addReaction()`, `listMessages()`, `getMessageReactions()` |
+| `central-hub/MessageRouter.gs` | **MODERATE** | Decouple from real-time, keep parsing + webhook sending |
 | `central-hub/HubMain.gs` | **MODERATE** | Add timer entry point, reduce onMessage |
 | `central-hub/HubSetup.gs` | **MINOR** | New sheet, new trigger |
-| `central-hub/PendingRequests.gs` | **MINOR** | Track reacted messages |
+| `central-hub/PendingRequests.gs` | **MINOR** | Simplified role, track reactions |
 | `central-hub/UserRegistry.gs` | **NONE** | Unchanged |
 | `central-hub/HubConfig.gs` | **NONE** | Unchanged |
 
@@ -300,19 +437,19 @@ Everything below applies to files in `src/`.
 **New behavior:**
 - **15-min timer** (`checkInboxAndPostNext()`):
   1. Scan inbox for unlabeled emails (no user labels)
-  2. Add any new unlabeled emails to Queue sheet with Status = "Queued"
-  3. If no email is currently "Posted" (awaiting labeling), take the top "Queued" row, post it to Chat, set Status = "Posted"
+  2. Add any new unlabeled emails to Queue sheet with Status = `Queued`
+  3. If no email is currently `Posted` (awaiting labeling), take the top `Queued` row, post it to Chat, set Status = `Posted`
 - **On webhook receipt** (`handleLabelWebhook()`):
   1. Find the Queue row by Email ID
   2. Apply labels to the email via Gmail API
   3. Delete the row (or mark "Completed")
-  4. Immediately post the next "Queued" email to Chat (don't wait for timer)
+  4. Immediately post the next `Queued` email to Chat (don't wait for timer)
 
 **Key changes:**
 - Remove: `promoteNextPending()` logic (replaced by post-on-webhook-receipt)
 - Remove: Checking for "Processing" status with filled labels (labels now come via webhook, not sheet edits)
 - Add: `postEmailToChat(emailId)` — formats and posts one email to Chat space
-- Add: `processNextInQueue()` — finds top "Queued" row, posts to Chat
+- Add: `processNextInQueue()` — finds top `Queued` row, posts to Chat
 - Change: Timer from checking labels-in-sheet to checking-inbox-for-new-emails
 
 **Queue Sheet Status Values (new):**
@@ -334,7 +471,7 @@ Everything below applies to files in `src/`.
   2. Apply labels to the Gmail message
   3. Delete/remove the Queue row for that Email ID
   4. Call `processNextInQueue()` to post the next email to Chat
-  5. Return success/failure response
+  5. Return success/failure response (Hub uses this to know cleanup is safe)
 
 - **Important**: Change from `doPost` to `doGet` for webhook receipt (per user's specification), OR support both. Apps Script web apps can handle both `doGet(e)` and `doPost(e)`.
 
@@ -365,6 +502,7 @@ Everything below applies to files in `src/`.
   {email body/context}
   ```
 - Remove: `notifyQueueComplete()`, `notifyQueueStarted()` (Hub doesn't need these; processing is per-message now)
+- Remove: `notifyHubComplete()` / CONFIRM_COMPLETE messages (cleanup is now handled by Hub using the Chat Message Name from the labeling sheet — no need for user to post back to Chat)
 - Keep: Registration and confirmation messages
 - Keep: Test messages
 
@@ -400,7 +538,7 @@ Everything below applies to files in `src/`.
 |------|-------------|-------------|
 | `src/QueueProcessor.gs` | **MAJOR** | New inbox polling, post-to-chat, webhook-triggered next |
 | `src/InboundWebhook.gs` | **MODERATE** | New label webhook handler, trigger next post |
-| `src/OutboundNotification.gs` | **MODERATE** | Simplify to EMAIL_READY, remove queue notifications |
+| `src/OutboundNotification.gs` | **MODERATE** | Simplify to EMAIL_READY, remove CONFIRM_COMPLETE |
 | `src/Main.gs` | **MINOR** | New trigger target, updated menu |
 | `src/ConfigManager.gs` | **NONE** | Unchanged |
 | `src/SheetSetup.gs` | **NONE** | Unchanged (minor column updates possible) |
@@ -412,15 +550,15 @@ Everything below applies to files in `src/`.
 ## Implementation Order (Suggested)
 
 ### Phase 1: Hub Foundation
-1. `central-hub/ChatManager.gs` — Add `addReaction()`, `listMessages()` (foundation for everything)
-2. `central-hub/EmailLabelingQueue.gs` — New module for labeling results sheet
-3. `central-hub/TimerProcessor.gs` — New 5-min timer logic
+1. `central-hub/ChatManager.gs` — Add `addReaction()`, `listMessages()`, `getMessageReactions()`
+2. `central-hub/EmailLabelingQueue.gs` — New module for labeling results sheet (with full lifecycle: new → dispatched → completed)
+3. `central-hub/TimerProcessor.gs` — New 5-min timer logic including `cleanupProcessedMessages()`
 4. `central-hub/HubMain.gs` / `HubSetup.gs` — Wire up timer, add sheet creation
 
 ### Phase 2: User Sheet
 5. `src/QueueProcessor.gs` — Rewrite for inbox polling + post-one-at-a-time
 6. `src/InboundWebhook.gs` — New label webhook handler + next-post trigger
-7. `src/OutboundNotification.gs` — Simplify message types
+7. `src/OutboundNotification.gs` — Simplify message types, remove CONFIRM_COMPLETE
 8. `src/Main.gs` — Update triggers and menu
 
 ### Phase 3: External + Testing
