@@ -81,99 +81,27 @@ USER                                      │              12. Hub sends webhook
 
 ---
 
-## Modules to Create/Change
+## Information Preserved Throughout the Loop
 
-### MODULE 1: User — `QueueProcessor.gs` (MAJOR CHANGES)
-
-**Current behavior:** Queue sheet is populated by menu action, processes labels from sheet on 15-min timer.
-
-**New behavior:**
-- **15-min timer** (`checkInboxAndPostNext()`):
-  1. Scan inbox for unlabeled emails (no user labels)
-  2. Add any new unlabeled emails to Queue sheet with Status = "Queued"
-  3. If no email is currently "Posted" (awaiting labeling), take the top "Queued" row, post it to Chat, set Status = "Posted"
-- **On webhook receipt** (`handleLabelWebhook()`):
-  1. Find the Queue row by Email ID
-  2. Apply labels to the email via Gmail API
-  3. Delete the row (or mark "Completed")
-  4. Immediately post the next "Queued" email to Chat (don't wait for timer)
-
-**Key changes:**
-- Remove: `promoteNextPending()` logic (replaced by post-on-webhook-receipt)
-- Remove: Checking for "Processing" status with filled labels (labels now come via webhook, not sheet edits)
-- Add: `postEmailToChat(emailId)` — formats and posts one email to Chat space
-- Add: `processNextInQueue()` — finds top "Queued" row, posts to Chat
-- Change: Timer from checking labels-in-sheet to checking-inbox-for-new-emails
-
-**Queue Sheet Status Values (new):**
-| Status | Meaning |
-|--------|---------|
-| Queued | In local queue, not yet sent to Chat |
-| Posted | Sent to Chat, awaiting labeling |
-| (deleted) | After labels applied, row is removed |
+| Data Point | Created At | Needed At | How It Travels |
+|------------|-----------|-----------|----------------|
+| **Email ID** | User inbox scan | User label application | Embedded in Chat message header `@user:[emailId]`, parsed by Flow, written to Hub sheet, sent in webhook |
+| **Instance Name** | User config | Hub webhook dispatch | Embedded in Chat message header `@user:[emailId]`, parsed by Flow, written to Hub sheet |
+| **Chat Message Name** | When posted to Chat | Hub emoji reaction + cleanup | Stored in Hub's labeling queue sheet |
+| **Email Contents** | User inbox scan | Gemini classification | Embedded in Chat message body |
+| **Labels + Descriptions** | User's Labels sheet | Gemini classification | Embedded in Chat message body |
+| **Assigned Label** | Gemini response | User label application | Written to Hub sheet, sent in webhook |
+| **User Webhook URL** | Registration | Hub dispatches results | Stored in Hub Registry sheet |
 
 ---
 
-### MODULE 2: User — `InboundWebhook.gs` (MODERATE CHANGES)
+# HUB CHANGES
 
-**Current behavior:** `doPost()` handles webhooks from Hub for registration, label updates, tests.
-
-**New behavior:**
-- Change `handleLabelUpdate()` to:
-  1. Receive: `{ action: "apply_labels", emailId, labels, chatMessageName }`
-  2. Apply labels to the Gmail message
-  3. Delete/remove the Queue row for that Email ID
-  4. Call `processNextInQueue()` to post the next email to Chat
-  5. Return success/failure response
-
-- **Important**: Change from `doPost` to `doGet` for webhook receipt (per user's specification), OR support both. Apps Script web apps can handle both `doGet(e)` and `doPost(e)`.
-
-**Open question for user:** You mentioned `doGet` for receiving webhooks. Currently the system uses `doPost`. Do you want to switch to `doGet` (parameters in URL query string, limited size) or keep `doPost` (JSON body, more data capacity)? `doPost` is more standard for webhooks carrying data payloads. We could support both.
+Everything below applies to files in `central-hub/`.
 
 ---
 
-### MODULE 3: User — `OutboundNotification.gs` (MODERATE CHANGES)
-
-**Current behavior:** Posts various message types to Chat (EMAIL_READY, QUEUE_STARTED, etc.).
-
-**New behavior:**
-- Simplify to primarily one message type: `EMAIL_READY`
-- Message format stays similar but must include all info the Flow needs:
-  ```
-  @{instanceName}:[{emailId}] EMAIL_READY
-
-  ===== AVAILABLE LABELS =====
-  Label1: description
-  Label2: description
-
-  ===== EMAIL TO CATEGORIZE =====
-  Email ID: {emailId}
-  Subject: {subject}
-  From: {from}
-  Date: {date}
-
-  {email body/context}
-  ```
-- Remove: `notifyQueueComplete()`, `notifyQueueStarted()` (Hub doesn't need these; processing is per-message now)
-- Keep: Registration and confirmation messages
-- Keep: Test messages
-
----
-
-### MODULE 4: User — `Main.gs` / Triggers (MINOR CHANGES)
-
-**Current behavior:** 15-min trigger calls `checkQueueForProcessing()`.
-
-**New behavior:**
-- 15-min trigger calls new `checkInboxAndPostNext()` instead
-- Menu items updated:
-  - Remove "Queue Unlabeled Emails" (now automatic)
-  - Add "Force Check Inbox Now" (manual trigger of `checkInboxAndPostNext()`)
-  - Keep label sync, registration, testing menu items
-
----
-
-### MODULE 5: Hub — NEW `TimerProcessor.gs` (NEW MODULE)
+## Hub Module 1: NEW `TimerProcessor.gs` (NEW FILE)
 
 **Current behavior:** Hub is entirely event-driven via `onMessage()`.
 
@@ -218,7 +146,7 @@ function hubTimerProcess() {
 
 ---
 
-### MODULE 6: Hub — NEW `EmailLabelingQueue.gs` (NEW MODULE)
+## Hub Module 2: NEW `EmailLabelingQueue.gs` (NEW FILE)
 
 **Purpose:** Manages the "Emails Ready for Labeling" sheet on the Hub.
 
@@ -242,7 +170,7 @@ function hubTimerProcess() {
 
 ---
 
-### MODULE 7: Hub — `ChatManager.gs` (MAJOR CHANGES)
+## Hub Module 3: `ChatManager.gs` (MAJOR CHANGES)
 
 **Current behavior:** `sendMessage()` and `deleteMessage()` using Chat API.
 
@@ -261,33 +189,33 @@ function hubTimerProcess() {
     });
   }
   ```
-- `listMessages(spaceId, filter)` — List messages in the space for polling
+- `listMessages(spaceId, pageSize)` — List messages in the space for polling
   ```javascript
-  function listMessages(spaceId, pageSize, filter) {
+  function listMessages(spaceId, pageSize) {
     const url = "https://chat.googleapis.com/v1/" + spaceId + "/messages?pageSize=" + (pageSize || 50);
     // Use Chat API to list recent messages
     // Returns array of message objects with name, text, createTime, etc.
   }
   ```
 - `getMessageReactions(messageName)` — Check if a message already has ✅
-- Keep: `sendMessage()`, `deleteMessage()`
+- Keep existing: `sendMessage()`, `deleteMessage()`
 
 ---
 
-### MODULE 8: Hub — `MessageRouter.gs` (MODERATE CHANGES)
+## Hub Module 4: `MessageRouter.gs` (MODERATE CHANGES)
 
 **Current behavior:** Parses messages received via `onMessage()` event and routes immediately.
 
 **New behavior:**
 - The real-time `onMessage()` routing is largely replaced by timer-based polling
-- `parseMessage()` still needed (used by timer processor when scanning messages)
+- `parseMessage()` still needed (used by TimerProcessor when scanning messages)
 - `routeLabelsToUser()` replaced by `dispatchLabelResults()` in TimerProcessor
 - Keep parsing logic, remove real-time routing logic
 - May keep `onMessage()` as a fallback or for future use, but primary path is timer-based
 
 ---
 
-### MODULE 9: Hub — `HubMain.gs` (MODERATE CHANGES)
+## Hub Module 5: `HubMain.gs` (MODERATE CHANGES)
 
 **Current behavior:** `onMessage()` is the primary entry point, processes everything in real-time.
 
@@ -301,7 +229,7 @@ function hubTimerProcess() {
 
 ---
 
-### MODULE 10: Hub — `HubSetup.gs` (MINOR CHANGES)
+## Hub Module 6: `HubSetup.gs` (MINOR CHANGES)
 
 - Add creation of "Emails Ready for Labeling" sheet
 - Add 5-minute timer trigger setup
@@ -309,7 +237,7 @@ function hubTimerProcess() {
 
 ---
 
-### MODULE 11: Hub — `PendingRequests.gs` (MINOR CHANGES)
+## Hub Module 7: `PendingRequests.gs` (MINOR CHANGES)
 
 - May be simplified since the "Emails Ready for Labeling" sheet takes over some tracking
 - Still useful for tracking registration conversations and cleanup
@@ -317,7 +245,7 @@ function hubTimerProcess() {
 
 ---
 
-### MODULE 12: Google Flow (EXTERNAL — CONFIGURATION CHANGES)
+## Hub Module 8: Google Flow (EXTERNAL — CONFIGURATION CHANGES)
 
 **Current trigger:** Sheet edit or Chat message arrival.
 
@@ -334,7 +262,139 @@ function hubTimerProcess() {
 
 ---
 
-## Summary of Changes by File
+## Hub Files — No Changes
+
+| File | Reason |
+|------|--------|
+| `central-hub/UserRegistry.gs` | Registry structure unchanged; still stores user webhooks |
+| `central-hub/HubConfig.gs` | Config keys unchanged |
+
+---
+
+## Hub Summary Table
+
+| File | Change Level | Key Changes |
+|------|-------------|-------------|
+| **NEW** `central-hub/TimerProcessor.gs` | **NEW** | 5-min timer: scan, react, dispatch |
+| **NEW** `central-hub/EmailLabelingQueue.gs` | **NEW** | "Emails Ready for Labeling" sheet CRUD |
+| `central-hub/ChatManager.gs` | **MAJOR** | Add reactions, list messages, check reactions |
+| `central-hub/MessageRouter.gs` | **MODERATE** | Decouple from real-time, support polling |
+| `central-hub/HubMain.gs` | **MODERATE** | Add timer entry point, reduce onMessage |
+| `central-hub/HubSetup.gs` | **MINOR** | New sheet, new trigger |
+| `central-hub/PendingRequests.gs` | **MINOR** | Track reacted messages |
+| `central-hub/UserRegistry.gs` | **NONE** | Unchanged |
+| `central-hub/HubConfig.gs` | **NONE** | Unchanged |
+
+---
+
+# USER SHEET CHANGES
+
+Everything below applies to files in `src/`.
+
+---
+
+## User Module 1: `QueueProcessor.gs` (MAJOR CHANGES)
+
+**Current behavior:** Queue sheet is populated by menu action ("Queue Unlabeled Emails"), processes labels that appear in the sheet on a 15-min timer.
+
+**New behavior:**
+- **15-min timer** (`checkInboxAndPostNext()`):
+  1. Scan inbox for unlabeled emails (no user labels)
+  2. Add any new unlabeled emails to Queue sheet with Status = "Queued"
+  3. If no email is currently "Posted" (awaiting labeling), take the top "Queued" row, post it to Chat, set Status = "Posted"
+- **On webhook receipt** (`handleLabelWebhook()`):
+  1. Find the Queue row by Email ID
+  2. Apply labels to the email via Gmail API
+  3. Delete the row (or mark "Completed")
+  4. Immediately post the next "Queued" email to Chat (don't wait for timer)
+
+**Key changes:**
+- Remove: `promoteNextPending()` logic (replaced by post-on-webhook-receipt)
+- Remove: Checking for "Processing" status with filled labels (labels now come via webhook, not sheet edits)
+- Add: `postEmailToChat(emailId)` — formats and posts one email to Chat space
+- Add: `processNextInQueue()` — finds top "Queued" row, posts to Chat
+- Change: Timer from checking labels-in-sheet to checking-inbox-for-new-emails
+
+**Queue Sheet Status Values (new):**
+| Status | Meaning |
+|--------|---------|
+| Queued | In local queue, not yet sent to Chat |
+| Posted | Sent to Chat, awaiting labeling |
+| (deleted) | After labels applied, row is removed |
+
+---
+
+## User Module 2: `InboundWebhook.gs` (MODERATE CHANGES)
+
+**Current behavior:** `doPost()` handles webhooks from Hub for registration, label updates, tests.
+
+**New behavior:**
+- Change `handleLabelUpdate()` to:
+  1. Receive: `{ action: "apply_labels", emailId, labels, chatMessageName }`
+  2. Apply labels to the Gmail message
+  3. Delete/remove the Queue row for that Email ID
+  4. Call `processNextInQueue()` to post the next email to Chat
+  5. Return success/failure response
+
+- **Important**: Change from `doPost` to `doGet` for webhook receipt (per user's specification), OR support both. Apps Script web apps can handle both `doGet(e)` and `doPost(e)`.
+
+**Open question:** You mentioned `doGet` for receiving webhooks. Currently the system uses `doPost`. Do you want to switch to `doGet` (parameters in URL query string, limited size) or keep `doPost` (JSON body, more data capacity)? `doPost` is more standard for webhooks carrying data payloads. We could support both.
+
+---
+
+## User Module 3: `OutboundNotification.gs` (MODERATE CHANGES)
+
+**Current behavior:** Posts various message types to Chat (EMAIL_READY, QUEUE_STARTED, QUEUE_COMPLETE, etc.).
+
+**New behavior:**
+- Simplify to primarily one message type: `EMAIL_READY`
+- Message format stays similar but must include all info the Flow needs:
+  ```
+  @{instanceName}:[{emailId}] EMAIL_READY
+
+  ===== AVAILABLE LABELS =====
+  Label1: description
+  Label2: description
+
+  ===== EMAIL TO CATEGORIZE =====
+  Email ID: {emailId}
+  Subject: {subject}
+  From: {from}
+  Date: {date}
+
+  {email body/context}
+  ```
+- Remove: `notifyQueueComplete()`, `notifyQueueStarted()` (Hub doesn't need these; processing is per-message now)
+- Keep: Registration and confirmation messages
+- Keep: Test messages
+
+---
+
+## User Module 4: `Main.gs` / Triggers (MINOR CHANGES)
+
+**Current behavior:** 15-min trigger calls `checkQueueForProcessing()`.
+
+**New behavior:**
+- 15-min trigger calls new `checkInboxAndPostNext()` instead
+- Menu items updated:
+  - Remove "Queue Unlabeled Emails" (now automatic)
+  - Add "Force Check Inbox Now" (manual trigger of `checkInboxAndPostNext()`)
+  - Keep label sync, registration, testing menu items
+
+---
+
+## User Files — No Changes
+
+| File | Reason |
+|------|--------|
+| `src/ConfigManager.gs` | Config keys unchanged; webhook URLs still stored the same way |
+| `src/SheetSetup.gs` | Queue sheet structure stays compatible (may need minor column updates) |
+| `src/LabelManager.gs` | Label application logic (`applyLabelsToEmail`) unchanged |
+| `src/Logger.gs` | Logging unchanged |
+
+---
+
+## User Summary Table
 
 | File | Change Level | Key Changes |
 |------|-------------|-------------|
@@ -342,45 +402,27 @@ function hubTimerProcess() {
 | `src/InboundWebhook.gs` | **MODERATE** | New label webhook handler, trigger next post |
 | `src/OutboundNotification.gs` | **MODERATE** | Simplify to EMAIL_READY, remove queue notifications |
 | `src/Main.gs` | **MINOR** | New trigger target, updated menu |
-| `src/ConfigManager.gs` | **MINOR** | No major changes expected |
-| `src/SheetSetup.gs` | **MINOR** | Queue sheet column updates if needed |
-| `src/LabelManager.gs` | **NONE** | Label application logic unchanged |
-| `src/Logger.gs` | **NONE** | Logging unchanged |
-| `central-hub/HubMain.gs` | **MODERATE** | Add timer entry point, reduce onMessage |
-| `central-hub/HubSetup.gs` | **MINOR** | New sheet, new trigger |
-| `central-hub/ChatManager.gs` | **MAJOR** | Add reactions, list messages, check reactions |
-| `central-hub/MessageRouter.gs` | **MODERATE** | Decouple from real-time, support polling |
-| `central-hub/UserRegistry.gs` | **NONE** | Registry unchanged |
-| `central-hub/PendingRequests.gs` | **MINOR** | Track reacted messages |
-| `central-hub/HubConfig.gs` | **NONE** | No changes |
-| **NEW** `central-hub/TimerProcessor.gs` | **NEW** | 5-min timer: scan, react, dispatch |
-| **NEW** `central-hub/EmailLabelingQueue.gs` | **NEW** | "Emails Ready for Labeling" sheet CRUD |
-
----
-
-## Information Preserved Throughout the Loop
-
-| Data Point | Created At | Needed At | How It Travels |
-|------------|-----------|-----------|----------------|
-| **Email ID** | User inbox scan | User label application | Embedded in Chat message header `@user:[emailId]`, parsed by Flow, written to Hub sheet, sent in webhook |
-| **Instance Name** | User config | Hub webhook dispatch | Embedded in Chat message header `@user:[emailId]`, parsed by Flow, written to Hub sheet |
-| **Chat Message Name** | When posted to Chat | Hub emoji reaction + cleanup | Stored in Hub's labeling queue sheet |
-| **Email Contents** | User inbox scan | Gemini classification | Embedded in Chat message body |
-| **Labels + Descriptions** | User's Labels sheet | Gemini classification | Embedded in Chat message body |
-| **Assigned Label** | Gemini response | User label application | Written to Hub sheet, sent in webhook |
-| **User Webhook URL** | Registration | Hub dispatches results | Stored in Hub Registry sheet |
+| `src/ConfigManager.gs` | **NONE** | Unchanged |
+| `src/SheetSetup.gs` | **NONE** | Unchanged (minor column updates possible) |
+| `src/LabelManager.gs` | **NONE** | Unchanged |
+| `src/Logger.gs` | **NONE** | Unchanged |
 
 ---
 
 ## Implementation Order (Suggested)
 
-1. **Hub ChatManager.gs** — Add `addReaction()`, `listMessages()` (foundation for everything else)
-2. **Hub EmailLabelingQueue.gs** — New module for labeling results sheet
-3. **Hub TimerProcessor.gs** — New 5-min timer logic
-4. **Hub HubMain.gs / HubSetup.gs** — Wire up timer, add sheet creation
-5. **User QueueProcessor.gs** — Rewrite for inbox polling + post-one-at-a-time
-6. **User InboundWebhook.gs** — New label webhook handler + next-post trigger
-7. **User OutboundNotification.gs** — Simplify message types
-8. **User Main.gs** — Update triggers and menu
-9. **Google Flow** — Reconfigure trigger and steps (external)
-10. **Integration testing** — End-to-end with test emails
+### Phase 1: Hub Foundation
+1. `central-hub/ChatManager.gs` — Add `addReaction()`, `listMessages()` (foundation for everything)
+2. `central-hub/EmailLabelingQueue.gs` — New module for labeling results sheet
+3. `central-hub/TimerProcessor.gs` — New 5-min timer logic
+4. `central-hub/HubMain.gs` / `HubSetup.gs` — Wire up timer, add sheet creation
+
+### Phase 2: User Sheet
+5. `src/QueueProcessor.gs` — Rewrite for inbox polling + post-one-at-a-time
+6. `src/InboundWebhook.gs` — New label webhook handler + next-post trigger
+7. `src/OutboundNotification.gs` — Simplify message types
+8. `src/Main.gs` — Update triggers and menu
+
+### Phase 3: External + Testing
+9. Google Flow — Reconfigure trigger (✅ emoji) and steps (external, not code)
+10. Integration testing — End-to-end with test emails
