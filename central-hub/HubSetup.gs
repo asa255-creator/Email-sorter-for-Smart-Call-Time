@@ -37,6 +37,9 @@ function onOpen() {
     .addItem('Test Webhook Ping (Hub → User → Hub)', 'testWebhookPingFromHub')
     .addItem('Test Chat Connection (Hub → User → Chat → Hub)', 'testChatConnectionFromHub')
     .addItem('Test Sheets Chat Round-Trip (Full test with message cleanup)', 'testSheetsChatFromHub')
+    .addSeparator()
+    .addItem('Retry Pending Registration Webhooks', 'retryPendingRegistrationWebhooks')
+    .addItem('Diagnose All Registry Users', 'diagnosePendingUsers')
     .addToUi();
 }
 

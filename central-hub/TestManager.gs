@@ -117,6 +117,216 @@ function testSheetsChatFromHub() {
 }
 
 // ============================================================================
+// RETRY PENDING REGISTRATION WEBHOOKS
+// ============================================================================
+
+/**
+ * Manually retries sending registration_confirmed webhooks to all pending users.
+ * Run this from the script editor or via Hub Admin menu to debug stuck registrations.
+ *
+ * For each pending user:
+ *   1. Reads their webhook URL from the Registry
+ *   2. Sends the registration_confirmed payload
+ *   3. Logs the full request/response details to HubLog
+ *
+ * Does NOT require a UI — safe to run from Apps Script editor's Run button.
+ * Check HubLog sheet for detailed results after running.
+ */
+function retryPendingRegistrationWebhooks() {
+  logHub('RETRY_PENDING_START', '=== Retrying pending registration webhooks ===');
+
+  // Read ALL users from Registry (including pending)
+  var sheet = getOrCreateRegistrySheet();
+  var lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) {
+    logHub('RETRY_PENDING_END', 'Registry is empty — nothing to retry');
+    Logger.log('Registry is empty — nothing to retry');
+    return;
+  }
+
+  var data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  var pendingUsers = [];
+
+  for (var i = 0; i < data.length; i++) {
+    var user = {
+      row: i + 2,
+      email: data[i][0],
+      instanceName: data[i][1],
+      sheetId: data[i][2],
+      webhookUrl: data[i][3],
+      status: data[i][4],
+      registeredAt: data[i][5]
+    };
+
+    if (user.status === 'pending') {
+      pendingUsers.push(user);
+    }
+  }
+
+  logHub('RETRY_PENDING_FOUND', 'Found ' + pendingUsers.length + ' pending user(s) out of ' + data.length + ' total');
+  Logger.log('Found ' + pendingUsers.length + ' pending user(s)');
+
+  if (pendingUsers.length === 0) {
+    logHub('RETRY_PENDING_END', 'No pending users — nothing to retry');
+    Logger.log('No pending users — nothing to retry');
+    return;
+  }
+
+  // Process each pending user
+  for (var j = 0; j < pendingUsers.length; j++) {
+    var user = pendingUsers[j];
+    var logPrefix = '[' + (j + 1) + '/' + pendingUsers.length + '] ' + user.instanceName;
+
+    logHub('RETRY_PENDING_USER', logPrefix + ' — email=' + user.email + ' webhookUrl=' + user.webhookUrl);
+    Logger.log(logPrefix + ' — webhookUrl=' + user.webhookUrl);
+
+    // Validate webhook URL
+    if (!user.webhookUrl) {
+      logHub('RETRY_PENDING_SKIP', logPrefix + ' — NO WEBHOOK URL in Registry');
+      Logger.log(logPrefix + ' — SKIPPED: no webhook URL');
+      continue;
+    }
+
+    // Build the exact same payload that handleChatRegistration sends
+    var payload = {
+      action: 'registration_confirmed',
+      instanceName: user.instanceName,
+      email: user.email,
+      conversationId: 'register',
+      message: 'Registration successful. Post CONFIRMED to chat to complete verification.',
+      timestamp: new Date().toISOString()
+    };
+
+    logHub('RETRY_PENDING_SENDING', logPrefix + ' — POST ' + user.webhookUrl + ' payload=' + JSON.stringify(payload));
+
+    try {
+      var response = UrlFetchApp.fetch(user.webhookUrl, {
+        method: 'POST',
+        contentType: 'application/json',
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true,
+        followRedirects: true
+      });
+
+      var responseCode = response.getResponseCode();
+      var responseBody = response.getContentText();
+      var responseHeaders = JSON.stringify(response.getHeaders());
+
+      // Truncate response body for logging (in case it's a huge HTML error page)
+      var bodyPreview = responseBody.length > 500
+        ? responseBody.substring(0, 500) + '... [truncated, total ' + responseBody.length + ' chars]'
+        : responseBody;
+
+      logHub('RETRY_PENDING_RESPONSE', logPrefix +
+        ' — HTTP ' + responseCode +
+        ' | body=' + bodyPreview);
+
+      Logger.log(logPrefix + ' — HTTP ' + responseCode);
+      Logger.log('  Response body: ' + bodyPreview);
+
+      if (responseCode === 200) {
+        logHub('RETRY_PENDING_SUCCESS', logPrefix + ' — Webhook delivered successfully');
+
+        // Ensure there is a pending request for the CONFIRMED flow
+        var existingPending = getPendingRequestByEmailId(user.instanceName, 'register');
+        if (!existingPending) {
+          createPendingRequest(user.instanceName, 'register', {
+            type: 'registration',
+            messageNames: [],
+            startedAt: new Date().toISOString(),
+            retriedAt: new Date().toISOString()
+          });
+          logHub('RETRY_PENDING_CREATED', logPrefix + ' — Created pending request for CONFIRMED flow');
+        } else {
+          logHub('RETRY_PENDING_EXISTS', logPrefix + ' — Pending request already exists');
+        }
+      } else {
+        logHub('RETRY_PENDING_FAILED', logPrefix + ' — HTTP ' + responseCode + ' (not 200)');
+      }
+
+    } catch (error) {
+      logHub('RETRY_PENDING_ERROR', logPrefix + ' — Exception: ' + error.message);
+      Logger.log(logPrefix + ' — ERROR: ' + error.message);
+    }
+  }
+
+  logHub('RETRY_PENDING_END', '=== Retry complete ===');
+  Logger.log('=== Retry complete. Check HubLog sheet for full details. ===');
+}
+
+/**
+ * Shows a diagnostic report of all users in the Registry (all statuses).
+ * Run from the script editor to see full details in the execution log.
+ */
+function diagnosePendingUsers() {
+  logHub('DIAGNOSE_START', '=== Diagnosing all Registry users ===');
+
+  var sheet = getOrCreateRegistrySheet();
+  var lastRow = sheet.getLastRow();
+
+  if (lastRow <= 1) {
+    Logger.log('Registry is empty');
+    return;
+  }
+
+  var data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+
+  for (var i = 0; i < data.length; i++) {
+    var email = data[i][0];
+    var instanceName = data[i][1];
+    var sheetId = data[i][2];
+    var webhookUrl = data[i][3];
+    var status = data[i][4];
+    var registeredAt = data[i][5];
+
+    var report = 'Row ' + (i + 2) + ': ' + instanceName +
+      '\n  email      = ' + email +
+      '\n  status     = ' + status +
+      '\n  webhookUrl = ' + webhookUrl +
+      '\n  sheetId    = ' + sheetId +
+      '\n  registered = ' + registeredAt;
+
+    Logger.log(report);
+    logHub('DIAGNOSE_USER', instanceName + ' | status=' + status + ' | webhook=' + webhookUrl);
+
+    // Test if webhook URL is reachable (GET only, non-destructive)
+    if (webhookUrl) {
+      try {
+        var testResp = UrlFetchApp.fetch(webhookUrl, {
+          method: 'GET',
+          muteHttpExceptions: true,
+          followRedirects: true
+        });
+        var code = testResp.getResponseCode();
+        var body = testResp.getContentText();
+        var bodyPreview = body.length > 200 ? body.substring(0, 200) + '...' : body;
+
+        Logger.log('  GET test: HTTP ' + code + ' | ' + bodyPreview);
+        logHub('DIAGNOSE_GET', instanceName + ' | HTTP ' + code + ' | ' + bodyPreview);
+      } catch (err) {
+        Logger.log('  GET test: ERROR — ' + err.message);
+        logHub('DIAGNOSE_GET_ERROR', instanceName + ' | ' + err.message);
+      }
+    } else {
+      Logger.log('  GET test: SKIPPED (no URL)');
+    }
+
+    // Check for pending request
+    var pending = getPendingRequestByEmailId(instanceName, 'register');
+    if (pending) {
+      Logger.log('  Pending request: YES (created ' + pending.createdAt + ', type=' + (pending.metadata.type || 'unknown') + ')');
+      logHub('DIAGNOSE_PENDING', instanceName + ' | pending request exists, type=' + (pending.metadata.type || 'unknown'));
+    } else {
+      Logger.log('  Pending request: NONE');
+    }
+  }
+
+  logHub('DIAGNOSE_END', '=== Diagnosis complete ===');
+  Logger.log('=== Done. Check HubLog sheet for persistent log. ===');
+}
+
+// ============================================================================
 // HELPERS
 // ============================================================================
 
