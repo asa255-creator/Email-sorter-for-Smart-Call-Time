@@ -39,7 +39,7 @@ function registerUser(userData) {
         instanceName,
         sheetId,
         webhookUrl,
-        'active',
+        'pending',
         new Date().toISOString()
       ]]);
 
@@ -62,7 +62,7 @@ function registerUser(userData) {
       instanceName,
       sheetId,
       webhookUrl,
-      'active',
+      'pending',
       new Date().toISOString()
     ]);
 
@@ -77,6 +77,36 @@ function registerUser(userData) {
       instanceName: instanceName,
       spaceInvite: inviteResult
     };
+
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Activates a user (transitions from 'pending' to 'active').
+ * Called after the CONFIRMED message is received and chat messages are cleaned up.
+ *
+ * @param {string} instanceName - Instance name to activate
+ * @returns {Object} Result with success status
+ */
+function activateUser(instanceName) {
+  try {
+    const sheet = getOrCreateRegistrySheet();
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return { success: false, error: 'Registry is empty' };
+
+    const data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+
+    for (let i = 0; i < data.length; i++) {
+      if (data[i][1] === instanceName && data[i][4] === 'pending') {
+        sheet.getRange(i + 2, 5).setValue('active');
+        logHub('USER_ACTIVATED', instanceName);
+        return { success: true, message: 'User activated' };
+      }
+    }
+
+    return { success: false, error: 'No pending user found: ' + instanceName };
 
   } catch (error) {
     return { success: false, error: error.message };
@@ -136,7 +166,7 @@ function getUserByInstance(instanceName) {
   const data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
 
   for (let i = 0; i < data.length; i++) {
-    if (data[i][1] === instanceName && data[i][4] === 'active') {
+    if (data[i][1] === instanceName && data[i][4] !== 'inactive') {
       return {
         email: data[i][0],
         instanceName: data[i][1],

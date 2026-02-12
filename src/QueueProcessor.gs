@@ -39,6 +39,12 @@
  * Called by the 15-minute time-based trigger.
  */
 function checkInboxAndPostNext() {
+  // Only process emails if registered with Hub
+  if (getConfigValue('hub_registered') !== 'true') {
+    logAction('SYSTEM', 'TIMER_SKIP', 'Not registered with Hub — skipping inbox scan');
+    return;
+  }
+
   var ss = SpreadsheetApp.getActive();
   var sheet = ss.getSheetByName('Queue');
   if (!sheet) return;
@@ -141,6 +147,13 @@ function buildEmailContext(message) {
  * @returns {boolean} True if an email was posted
  */
 function postNextQueuedEmail(sheet) {
+  // Check registration before posting — without this, the chain from
+  // applyLabelsAndAdvanceQueue would keep posting emails even when not registered
+  if (getConfigValue('hub_registered') !== 'true') {
+    logAction('SYSTEM', 'POST_SKIP', 'Not registered with Hub — skipping post');
+    return false;
+  }
+
   if (!sheet) {
     sheet = SpreadsheetApp.getActive().getSheetByName('Queue');
     if (!sheet) return false;
@@ -348,6 +361,15 @@ function parseLabelsString(labelString) {
  */
 function scanInboxNow() {
   var ui = SpreadsheetApp.getUi();
+
+  if (getConfigValue('hub_registered') !== 'true') {
+    ui.alert('Not Registered',
+      'This instance is not registered with the Hub.\n\n' +
+      'Register first via:\n  Settings > Register with Hub (via Chat)',
+      ui.ButtonSet.OK);
+    return;
+  }
+
   var ss = SpreadsheetApp.getActive();
   var sheet = ss.getSheetByName('Queue');
 
