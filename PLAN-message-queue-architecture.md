@@ -4,7 +4,7 @@
 
 The system is shifting from a Google Flow-triggered model to a **timer-driven polling model** where:
 - **User instances** poll their inbox on a 15-min timer and post ONE email at a time to Chat
-- **Hub** polls Chat on a 5-min timer, adds emoji reactions to trigger Flows, and dispatches labeling results back to users
+- **Hub** is **purely timer-driven** — polls Chat on a 5-min timer, adds emoji reactions to trigger Flows, and dispatches labeling results back to users. There is NO Chat App HTTP endpoint. The Hub uses `Chat.Spaces.Messages.list()` to read messages, not `onMessage()`.
 - **Google Flow** is triggered by the emoji reaction (not by sheet edits or direct Chat events)
 
 ---
@@ -364,17 +364,16 @@ function hubTimerProcess() {
 
 ---
 
-## Hub Module 5: `HubMain.gs` (MODERATE CHANGES)
+## Hub Module 5: `HubMain.gs` (MAJOR CHANGES)
 
-**Current behavior:** `onMessage()` is the primary entry point, processes everything in real-time.
+**Current behavior:** `onMessage()` is the primary entry point, processes everything in real-time via Chat App HTTP endpoint.
 
 **New behavior:**
-- Add `hubTimerProcess()` as the new primary entry point (called by 5-min trigger)
-- `onMessage()` can remain but with reduced responsibility:
-  - Could still handle registration for faster response
-  - Or simply log the message and let the timer handle it
-- Add trigger setup for the 5-minute timer
-- Add menu item to manually trigger `hubTimerProcess()`
+- **`onMessage()`, `onAddedToSpace()`, `onRemovedFromSpace()`, `onAppCommand()` are all REMOVED** — there is no Chat App. The Hub does NOT function as a Chat HTTP endpoint.
+- `doPost()` is simplified to only handle direct webhook calls (`ping`, `status`)
+- `doGet()` returns status info
+- All Chat message processing is done by `hubTimerProcess()` in TimerProcessor.gs
+- Registration handlers (`handleChatRegistration`, `handleChatUnregistration`, `parseRegistrationData`) remain — they're called by TimerProcessor, not by onMessage
 
 ---
 
@@ -428,7 +427,7 @@ function hubTimerProcess() {
 | **NEW** `central-hub/EmailLabelingQueue.gs` | **NEW** | "Emails Ready for Labeling" sheet CRUD with `dispatched` → `completed` lifecycle |
 | `central-hub/ChatManager.gs` | **MAJOR** | Add `addReaction()`, `listMessages()`, `getMessageReactions()` |
 | `central-hub/MessageRouter.gs` | **MODERATE** | Decouple from real-time, keep parsing + webhook sending |
-| `central-hub/HubMain.gs` | **MODERATE** | Add timer entry point, reduce onMessage |
+| `central-hub/HubMain.gs` | **MAJOR** | Remove onMessage/Chat App entirely, keep doPost for ping/status only |
 | `central-hub/HubSetup.gs` | **MINOR** | New sheet, new trigger |
 | `central-hub/PendingRequests.gs` | **MINOR** | Simplified role, track reactions |
 | `central-hub/UserRegistry.gs` | **NONE** | Unchanged |

@@ -62,15 +62,12 @@ function runHubSetup() {
     'Hub Setup Complete',
     'Required sheets have been created.\n\n' +
     'Next steps:\n' +
-    '1. Deploy as Web App (Deploy > New deployment > Web app)\n' +
-    '2. Copy the Web App URL\n' +
-    '3. In Google Cloud Console, enable the Chat API\n' +
-    '4. Go to Chat API > Configuration tab\n' +
-    '5. Set Connection settings to "HTTP endpoint URL"\n' +
-    '6. Paste the Web App URL as the HTTP endpoint\n' +
-    '7. Add the Chat App to your Chat space\n' +
-    '8. Configure Chat Webhook (Hub Admin > Configure Chat Webhook)\n' +
-    '9. Configure Chat Space ID (Hub Admin > Configure Chat Space)\n\n' +
+    '1. Enable the Google Chat API in Google Cloud Console\n' +
+    '2. Configure Chat Space ID (Hub Admin > Configure Chat Space)\n' +
+    '3. Configure Chat Webhook (Hub Admin > Configure Chat Webhook)\n' +
+    '4. Start the Hub Timer (Hub Admin > Timer > Start Hub Timer)\n\n' +
+    'The Hub is purely timer-driven — it polls Chat every 5 minutes.\n' +
+    'No Chat App HTTP endpoint is needed.\n\n' +
     'See README.md for detailed instructions.',
     ui.ButtonSet.OK
   );
@@ -128,10 +125,19 @@ function configureChatSpace() {
     let spaceId = response.getResponseText().trim();
 
     if (spaceId) {
-      // Ensure proper format
-      if (!spaceId.startsWith('spaces/')) {
-        spaceId = 'spaces/' + spaceId;
-      }
+      // Clean up common mistakes from Chat URLs
+      // URL might be: chat.google.com/chat/u/0/#chat/space/AAQAULujEoo
+      // Or pasted as: spaces/space/AAQAULujEoo (wrong — extra /space/)
+      // Correct format: spaces/AAQAULujEoo
+
+      // Strip everything before the actual space code
+      var spaceCode = spaceId.replace(/.*\/space\//, '')   // from URL paths
+                             .replace(/.*\/room\//, '')     // from room URLs
+                             .replace(/^spaces\//, '')      // strip spaces/ prefix
+                             .replace(/\/.*/g, '')          // strip trailing paths
+                             .trim();
+
+      spaceId = 'spaces/' + spaceCode;
 
       setHubConfig('chat_space_id', spaceId);
       ui.alert('Success', `Chat space ID saved: ${spaceId}\n\nNew user registrations will now receive automatic invites.`, ui.ButtonSet.OK);

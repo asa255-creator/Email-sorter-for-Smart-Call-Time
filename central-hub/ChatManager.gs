@@ -176,9 +176,19 @@ function listChatMessages(pageSize) {
       pageSize: pageSize || 50
     });
 
+    var msgs = response.messages || [];
+
+    // Normalize: Chat API may return formattedText instead of text.
+    // Ensure every message has a text property for downstream consumers.
+    for (var i = 0; i < msgs.length; i++) {
+      if (!msgs[i].text && msgs[i].formattedText) {
+        msgs[i].text = msgs[i].formattedText;
+      }
+    }
+
     return {
       success: true,
-      messages: response.messages || []
+      messages: msgs
     };
 
   } catch (error) {

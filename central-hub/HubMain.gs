@@ -1,16 +1,15 @@
 /**
  * Central Hub - Main Entry Points
  *
- * The Hub is deployed as BOTH a Web App and a Google Chat App.
+ * The Hub is a Google Sheet with a timer-based processor.
+ * It does NOT function as a Chat App — there is no HTTP endpoint for Chat events.
  *
- * Web App (doPost/doGet):
- * - Receives Google Chat events when configured as an HTTP endpoint
- * - Handles direct webhook calls (ping, status)
+ * All message processing happens via the 5-minute timer in TimerProcessor.gs,
+ * which polls the Chat space using Chat.Spaces.Messages.list().
  *
- * Chat App (onMessage, onAddedToSpace, etc.):
- * - Receives Google Chat events when configured as an Apps Script project
- *
- * Both entry points route to the same message handling logic.
+ * Web App (doGet/doPost):
+ * - doGet: Status check only
+ * - doPost: Direct webhook calls (ping, status) — NOT Chat events
  *
  * The Hub reads/writes webhook URLs from Google Sheets (Registry).
  * The Hub sends outbound webhooks to user instances via UrlFetchApp.
@@ -37,19 +36,18 @@ function doGet(e) {
     registeredUsers: users.length,
     chatSpaceConfigured: !!config.chat_space_id,
     timestamp: new Date().toISOString(),
+    mode: 'timer-driven (5-min polling)',
     endpoints: {
       'GET /': 'Status check (this response)',
-      'POST /': 'Receive Google Chat events or direct webhook calls'
+      'POST /': 'Direct webhook calls (ping, status)'
     }
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
  * Handles POST requests.
- *
- * Two modes:
- * 1. Google Chat HTTP endpoint events (have event.type, event.message, etc.)
- * 2. Direct webhook calls (have action field)
+ * Only handles direct webhook calls (ping, status).
+ * Does NOT handle Chat events — the Hub is purely timer-driven.
  *
  * @param {Object} e - Event object with postData
  * @returns {TextOutput} JSON response
@@ -57,24 +55,6 @@ function doGet(e) {
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
-
-    // --- Google Chat HTTP endpoint events ---
-    // When the Hub is configured as an HTTP endpoint in Cloud Console,
-    // Google Chat sends events here instead of calling onMessage() directly.
-    if (data.type === 'MESSAGE' && data.message) {
-      var chatResult = onMessage(data);
-      return hubJsonResponse(chatResult);
-    }
-
-    if (data.type === 'ADDED_TO_SPACE' && data.space) {
-      var addResult = onAddedToSpace(data);
-      return hubJsonResponse(addResult);
-    }
-
-    if (data.type === 'REMOVED_FROM_SPACE') {
-      onRemovedFromSpace(data);
-      return hubJsonResponse({ text: 'Acknowledged' });
-    }
 
     // --- Direct webhook calls ---
     if (data.action === 'ping') {
@@ -94,7 +74,7 @@ function doPost(e) {
 
     // Unknown request
     logHub('DOPOST_UNKNOWN', 'Unknown request: ' + JSON.stringify(data).substring(0, 200));
-    return hubJsonResponse({ success: false, error: 'Unknown request type. Expected Chat event or action.' });
+    return hubJsonResponse({ success: false, error: 'Unknown request. Hub is timer-driven — no Chat events handled here.' });
 
   } catch (error) {
     logHub('DOPOST_ERROR', error.message);
@@ -114,143 +94,13 @@ function hubJsonResponse(data) {
 }
 
 // ============================================================================
-// CHAT APP ENTRY POINTS
-// ============================================================================
-
-/**
- * Handles messages sent to the Chat app.
- * Called directly by Chat (Apps Script project mode) or via doPost (HTTP endpoint mode).
- *
- * In the timer-based architecture, most message processing is handled by
- * hubTimerProcess() in TimerProcessor.gs. This onMessage handler serves as
- * a lightweight fallback for real-time responses when the Hub is configured
- * as a Chat App (Apps Script project mode or HTTP endpoint mode).
- *
- * It logs incoming messages and handles a few cases that benefit from
- * immediate response (REGISTER, UNREGISTER, tests). The heavy lifting
- * (EMAIL_READY reactions, CONFIRM_COMPLETE cleanup, label dispatch) is
- * done by the 5-minute timer.
- *
- * @param {Object} event - Chat event object
- * @returns {Object} Response message
- */
-function onMessage(event) {
-  try {
-    var message = event.message.text;
-    var sender = event.user.email || event.user.displayName;
-    var messageName = event.message.name;
-
-    logHub('MESSAGE_RECEIVED', 'From: ' + sender + ', Message: ' + message.substring(0, 100) + '...');
-
-    var parsed = parseMessage(message);
-    var msgType = getMessageType(parsed.labels);
-
-    // Handle REGISTER messages immediately for faster feedback
-    if (parsed.instanceName && msgType === 'REGISTER') {
-      var regResult = handleChatRegistration(parsed, message, messageName);
-      if (regResult.success) {
-        return { text: parsed.instanceName + ': Registration successful. Webhook confirmed.' };
-      }
-      return { text: 'Registration failed: ' + regResult.error };
-    }
-
-    // Handle UNREGISTER messages immediately
-    if (parsed.instanceName && msgType === 'UNREGISTER') {
-      var unregResult = handleChatUnregistration(parsed, messageName);
-      if (unregResult.success) {
-        return { text: parsed.instanceName + ': Unregistered.' };
-      }
-      return { text: 'Unregister failed: ' + unregResult.error };
-    }
-
-    // Handle test messages immediately for faster feedback
-    if (parsed.instanceName && isTestChatLabels(parsed.labels)) {
-      var testResult = handleTestChatMessage(parsed, messageName);
-      if (testResult.success) {
-        return { text: 'Test chat received for ' + parsed.instanceName + '. Webhook sent.' };
-      }
-      return { text: 'Test chat connection failed: ' + testResult.error };
-    }
-
-    // Handle CONFIRMED messages (test round-trip) immediately
-    if (parsed.instanceName && msgType === 'CONFIRMED') {
-      var confirmResult = handleConfirmedMessage(parsed, messageName);
-      if (confirmResult.success) {
-        return { text: parsed.instanceName + ': Confirmed. ' + (confirmResult.deleted || 0) + ' messages cleaned up.' };
-      }
-      return { text: 'Confirm handling failed: ' + confirmResult.error };
-    }
-
-    // All other messages (EMAIL_READY, CONFIRM_COMPLETE, label responses)
-    // are handled by the 5-minute timer in TimerProcessor.gs.
-    // Just log and acknowledge.
-    if (parsed.instanceName && msgType) {
-      logHub('MESSAGE_QUEUED', parsed.instanceName + ': ' + msgType + ' (will be processed by timer)');
-      return { text: 'Received: ' + parsed.instanceName + ' ' + msgType + '. Will be processed on next timer cycle.' };
-    }
-
-    // Unknown message — log it
-    logHub('MESSAGE_UNKNOWN', 'Unrecognized message from ' + sender);
-    return { text: 'Message received. Will be processed on next timer cycle.' };
-
-  } catch (error) {
-    logHub('MESSAGE_ERROR', error.message);
-    return { text: 'Error: ' + error.message };
-  }
-}
-
-/**
- * Handles the app being added to a space.
- *
- * @param {Object} event - Chat event object
- * @returns {Object} Welcome message
- */
-function onAddedToSpace(event) {
-  var spaceName = event.space.displayName || event.space.name;
-
-  // Auto-save the space ID for sending messages
-  if (event.space.name) {
-    setHubConfig('chat_space_id', event.space.name);
-    logHub('SPACE_ID_SAVED', event.space.name);
-  }
-
-  logHub('ADDED_TO_SPACE', spaceName);
-
-  return {
-    text: 'Smart Call Time Hub is ready! Users can register by posting REGISTER messages to this space.'
-  };
-}
-
-/**
- * Handles the app being removed from a space.
- *
- * @param {Object} event - Chat event object
- */
-function onRemovedFromSpace(event) {
-  logHub('REMOVED_FROM_SPACE', event.space.name);
-}
-
-/**
- * Handles slash commands (app commands).
- *
- * @param {Object} event - Chat event object
- * @returns {Object} Response message
- */
-function onAppCommand(event) {
-  var commandId = event.message && event.message.slashCommand ? event.message.slashCommand.commandId : 'unknown';
-  logHub('APP_COMMAND', 'Command ID: ' + commandId);
-
-  return {
-    text: 'No commands configured yet. Post @instance_name:[id] REGISTER to register, or labels to route.'
-  };
-}
-
-// ============================================================================
 // CHAT-BASED REGISTRATION HANDLERS
+// (Called by TimerProcessor.scanForRegistrationMessages)
 // ============================================================================
 
 /**
  * Handles registration via Chat message.
+ * Called by TimerProcessor when it finds a REGISTER message in Chat.
  *
  * Expected message body (lines after the header):
  *   email=user@example.com
@@ -315,9 +165,6 @@ function handleChatRegistration(parsed, fullMessage, messageName) {
       logHub('REGISTRATION_CONFIRM_FAILED', instanceName + ': ' + webhookResult.error);
     }
 
-    // Do NOT delete chat messages yet - wait for CONFIRMED from user
-    // The handleConfirmedMessage() handler will delete them when CONFIRMED arrives
-
     return {
       success: true,
       instanceName: instanceName,
@@ -332,6 +179,7 @@ function handleChatRegistration(parsed, fullMessage, messageName) {
 
 /**
  * Handles unregistration via Chat message.
+ * Called by TimerProcessor when it finds an UNREGISTER message in Chat.
  *
  * @param {Object} parsed - Parsed message
  * @param {string} messageName - Chat message name for cleanup
@@ -348,63 +196,6 @@ function handleChatUnregistration(parsed, messageName) {
 
     return result;
   } catch (error) {
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * Handles CONFIRM_COMPLETE via Chat message.
- * User posts this after applying labels. Hub deletes tracked messages.
- *
- * @param {Object} parsed - Parsed message (instanceName, emailId)
- * @param {string} messageName - This message's name for cleanup
- * @returns {Object} Result
- */
-function handleChatConfirmComplete(parsed, messageName) {
-  var instanceName = parsed.instanceName;
-  var emailId = parsed.emailId;
-
-  if (!instanceName || !emailId) {
-    return { success: false, error: 'Missing instanceName or emailId' };
-  }
-
-  try {
-    // Get the pending request to find tracked message IDs
-    var pendingRequest = getPendingRequestByEmailId(instanceName, emailId);
-
-    var allMessages = [];
-
-    if (pendingRequest && pendingRequest.messageNames && pendingRequest.messageNames.length > 0) {
-      allMessages = pendingRequest.messageNames.slice();
-    }
-
-    // Also delete this CONFIRM_COMPLETE message itself
-    if (messageName) {
-      allMessages.push(messageName);
-    }
-
-    // Delete all tracked chat messages
-    var deleteResult = { deleted: 0 };
-    if (allMessages.length > 0) {
-      deleteResult = deleteChatMessages(allMessages);
-      logHub('CONFIRM_COMPLETE_CLEANUP', instanceName + '/' + emailId + ': deleted ' + deleteResult.deleted + ' messages');
-    }
-
-    // Remove from pending sheet
-    if (pendingRequest) {
-      removePendingRequest(instanceName, emailId);
-    }
-
-    logHub('CONFIRM_COMPLETE', instanceName + '/' + emailId + ' - cleaned up');
-
-    return {
-      success: true,
-      deleted: deleteResult.deleted,
-      message: 'Request completed and chat messages cleaned up'
-    };
-
-  } catch (error) {
-    logHub('CONFIRM_ERROR', instanceName + '/' + emailId + ': ' + error.message);
     return { success: false, error: error.message };
   }
 }

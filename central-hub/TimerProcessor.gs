@@ -41,7 +41,7 @@ function hubTimerProcess() {
       return;
     }
 
-    var messages = listResult.messages;
+    var messages = listResult.messages || [];
     logHub('TIMER_MESSAGES', 'Found ' + messages.length + ' messages in Chat space');
 
     // Step 1: Process registration messages
