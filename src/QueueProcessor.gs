@@ -147,6 +147,13 @@ function buildEmailContext(message) {
  * @returns {boolean} True if an email was posted
  */
 function postNextQueuedEmail(sheet) {
+  // Check registration before posting — without this, the chain from
+  // applyLabelsAndAdvanceQueue would keep posting emails even when not registered
+  if (getConfigValue('hub_registered') !== 'true') {
+    logAction('SYSTEM', 'POST_SKIP', 'Not registered with Hub — skipping post');
+    return false;
+  }
+
   if (!sheet) {
     sheet = SpreadsheetApp.getActive().getSheetByName('Queue');
     if (!sheet) return false;

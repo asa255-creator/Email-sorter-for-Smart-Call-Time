@@ -86,6 +86,15 @@ function scanForRegistrationMessages(messages) {
     var msgType = getMessageType(parsed.labels);
 
     if (parsed.instanceName && msgType === 'REGISTER') {
+      // Skip if this user is already registered (pending or active)
+      // The REGISTER message stays in chat until CONFIRMED is processed.
+      // Without this check, every timer cycle would re-register and reset status to 'pending'.
+      var existingUser = getUserByInstance(parsed.instanceName);
+      if (existingUser && (existingUser.status === 'pending' || existingUser.status === 'active')) {
+        logHub('TIMER_REGISTER_SKIP', parsed.instanceName + ' already ' + existingUser.status + ' — skipping duplicate REGISTER');
+        continue;
+      }
+
       logHub('TIMER_REGISTER', 'Found REGISTER from ' + parsed.instanceName);
       handleChatRegistration(parsed, msg.text, msg.name);
     }
