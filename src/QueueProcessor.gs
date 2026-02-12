@@ -269,7 +269,11 @@ function applyLabelsAndAdvanceQueue(emailId, labelsString) {
   // Delete the Queue row for this email
   deleteQueueRowByEmailId(sheet, emailId);
 
-  // Post the next Queued email to Chat
+  // Scan inbox for new emails (adds to queue), then post next from queue
+  var added = scanInboxForNewEmails(sheet);
+  if (added > 0) {
+    logAction('SYSTEM', 'WEBHOOK_SCAN', 'Added ' + added + ' new email(s) to queue after label apply');
+  }
   postNextQueuedEmail(sheet);
 
   return {
