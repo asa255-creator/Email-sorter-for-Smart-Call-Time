@@ -251,7 +251,7 @@ function registerWithHub() {
              'webhook=' + webhookUrl + '\n' +
              'sheetId=' + sheetId;
 
-  var message = buildChatMessage(instanceName, 'register', 'REGISTER', body);
+  var message = buildChatMessage(instanceName, 'register', 'REGISTER', 'processing', body);
 
   // Post to Google Chat (Hub will see it via onMessage)
   postToChat(chatWebhookUrl, message);
@@ -273,7 +273,7 @@ function registerWithHub() {
  * Notifies the Hub that email processing is complete by posting to Chat.
  * Hub will delete related Chat messages and clean up pending request.
  *
- * Posts: @instanceName:[emailId] CONFIRM_COMPLETE
+ * Posts CONFIRM_COMPLETE with status: closed
  *
  * @param {string} emailId - The email ID that was processed
  * @returns {Object} Result
@@ -288,7 +288,7 @@ function notifyHubComplete(emailId) {
   var instanceName = getInstanceName();
 
   // Post CONFIRM_COMPLETE to chat - Hub's onMessage will handle cleanup
-  var message = buildChatMessage(instanceName, emailId, 'CONFIRM_COMPLETE');
+  var message = buildChatMessage(instanceName, emailId, 'CONFIRM_COMPLETE', 'closed');
   postToChat(chatWebhookUrl, message);
 
   logAction(emailId, 'HUB_NOTIFIED', 'CONFIRM_COMPLETE posted to chat');

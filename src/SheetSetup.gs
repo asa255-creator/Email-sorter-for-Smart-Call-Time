@@ -307,8 +307,6 @@ function buildInstructionsContent() {
     ['MESSAGE TYPES:'],
     ['  EMAIL_READY         - Email is ready for AI categorization'],
     ['  LABEL_RESPONSE      - AI response with labels (not auto-generated)'],
-    ['  QUEUE_STARTED       - Batch of emails has been queued'],
-    ['  QUEUE_COMPLETE      - Queue processing finished'],
     ['  SHEETS_CHAT_TEST    - Test message for connectivity verification'],
     ['  CONFIRMED           - Confirmation reply (used in test flow)'],
     ['  TEST_CHAT_CONNECTION - Legacy test message'],

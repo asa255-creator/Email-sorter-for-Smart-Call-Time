@@ -104,7 +104,7 @@ function handleRegistrationConfirmed(data) {
   // Hub will see this and delete all registration chat messages
   var chatWebhookUrl = getChatWebhookUrl();
   if (chatWebhookUrl) {
-    var confirmedMessage = buildChatMessage(instanceName, conversationId, 'CONFIRMED');
+    var confirmedMessage = buildChatMessage(instanceName, conversationId, 'CONFIRMED', 'closed');
     postToChat(chatWebhookUrl, confirmedMessage);
     logAction('CONFIG', 'REGISTRATION_CONFIRMED_SENT', 'CONFIRMED posted to chat for ' + instanceName);
   } else {
