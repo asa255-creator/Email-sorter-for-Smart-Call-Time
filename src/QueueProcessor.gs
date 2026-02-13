@@ -188,16 +188,7 @@ function postNextQueuedEmail(sheet) {
         'Email ID: ' + emailId + '\n' +
         'Subject: ' + subject + '\n' +
         'From: ' + from + '\n\n' +
-        context +
-        '\n\n===== INSTRUCTIONS =====\n' +
-        'Respond with the matching label(s) from AVAILABLE LABELS above, using this format:\n' +
-        'user: ' + instanceName + '\n' +
-        'conversation_id: ' + emailId + '\n' +
-        'type: LABEL_RESPONSE\n' +
-        'status: closed\n\n' +
-        'Label1, Label2\n\n' +
-        'Use ONLY labels from AVAILABLE LABELS above.\n' +
-        'If nothing fits, respond with NONE as the body.';
+        context;
 
       var message = buildChatMessage(instanceName, emailId, 'EMAIL_READY', 'processing', body);
 
