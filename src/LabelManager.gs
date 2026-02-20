@@ -86,6 +86,8 @@ function getLabelByName(labelName) {
  * Syncs Gmail labels to the Labels sheet.
  * Preserves user-entered Description column (E).
  * Called manually or during setup.
+ *
+ * If label_mode is 'custom', shows a warning and skips the Gmail sync.
  */
 function syncLabelsToSheet() {
   const ss = SpreadsheetApp.getActive();
@@ -94,6 +96,29 @@ function syncLabelsToSheet() {
   if (!sheet) {
     console.error('Labels sheet not found. Run setup first.');
     return;
+  }
+
+  // Respect custom label mode — don't overwrite user-defined labels
+  const labelMode = getConfigValue('label_mode') || 'gmail';
+  if (labelMode === 'custom') {
+    try {
+      const ui = SpreadsheetApp.getUi();
+      const response = ui.alert(
+        'Custom Label Mode Active',
+        'You are in Custom Label Mode.\n\n' +
+        'Syncing from Gmail will REPLACE your custom labels.\n\n' +
+        'Do you want to sync from Gmail anyway?',
+        ui.ButtonSet.YES_NO
+      );
+      if (response !== ui.Button.YES) {
+        logAction('SYSTEM', 'SYNC_SKIP', 'Gmail sync skipped — custom label mode active');
+        return;
+      }
+    } catch (e) {
+      // Called from timer / non-UI context — silently skip
+      logAction('SYSTEM', 'SYNC_SKIP', 'Gmail sync skipped (custom mode, no UI)');
+      return;
+    }
   }
 
   const labels = getGmailLabels();

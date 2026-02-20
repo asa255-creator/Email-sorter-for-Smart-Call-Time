@@ -34,12 +34,31 @@
 /**
  * Main 15-minute timer function.
  * 1. Scans inbox for unlabeled emails, adds new ones to Queue as "Queued"
- * 2. If no email is currently "Posted", posts the top Queued email to Chat
+ * 2. Routes each email to AI via the configured connection mode:
+ *    - chat_hub:          post to Google Chat, wait for Hub webhook
+ *    - direct_claude_api: call Claude API directly and apply labels immediately
  *
  * Called by the 15-minute time-based trigger.
  */
 function checkInboxAndPostNext() {
-  // Only process emails if registered with Hub
+  var connectionMode = getConfigValue('connection_mode') || 'chat_hub';
+
+  if (connectionMode === 'direct_claude_api') {
+    // Direct Claude API mode — no Hub registration required
+    var ss = SpreadsheetApp.getActive();
+    var sheet = ss.getSheetByName('Queue');
+    if (!sheet) return;
+
+    var added = scanInboxForNewEmails(sheet);
+    if (added > 0) {
+      logAction('SYSTEM', 'INBOX_SCAN', 'Added ' + added + ' new email(s) to queue (Direct Claude API mode)');
+    }
+
+    processQueueWithClaudeApi(sheet);
+    return;
+  }
+
+  // ── Chat Hub mode (default) ────────────────────────────────────────────────
   if (String(getConfigValue('hub_registered')).toLowerCase() !== 'true') {
     logAction('SYSTEM', 'TIMER_SKIP', 'Not registered with Hub — skipping inbox scan');
     return;
@@ -58,6 +77,79 @@ function checkInboxAndPostNext() {
   // Step 2: If nothing is currently Posted, post the next Queued email
   if (!hasPostedRow(sheet)) {
     postNextQueuedEmail(sheet);
+  }
+}
+
+// ============================================================================
+// DIRECT CLAUDE API PROCESSING
+// ============================================================================
+
+/**
+ * Processes all Queued emails using the Claude API directly.
+ * For each Queued row:
+ *   1. Calls callClaudeForLabels()
+ *   2. Applies the returned labels to the Gmail thread
+ *   3. Deletes the Queue row
+ *
+ * Skips rows that don't have Status = "Queued".
+ *
+ * @param {Sheet} sheet - The Queue sheet
+ */
+function processQueueWithClaudeApi(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return;
+
+  var data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  var rowsToDelete = [];
+
+  for (var i = 0; i < data.length; i++) {
+    if (data[i][5] !== 'Queued') continue;
+
+    var emailId = data[i][0];
+    var subject = data[i][1];
+    var from    = data[i][2];
+    var context = data[i][7]; // Full email body stored in Context column
+
+    // Extract body from context string (built by buildEmailContext)
+    var body = context || '';
+
+    logAction(emailId, 'CLAUDE_API_START', 'Processing via Direct Claude API');
+
+    var labelText = callClaudeForLabels(emailId, subject, from, body);
+
+    if (labelText === null) {
+      // API call failed — mark as Error and move on
+      sheet.getRange(i + 2, 6).setValue('Error');
+      logAction(emailId, 'CLAUDE_API_FAIL', 'No response from Claude — marked as Error');
+      continue;
+    }
+
+    // Apply labels
+    var labels = parseLabelsString(labelText);
+    if (labels.length > 0) {
+      try {
+        applyLabelsToEmail(emailId, labels);
+        logAction(emailId, 'LABELED', 'Applied (Claude API): ' + labels.join(', '));
+      } catch (err) {
+        sheet.getRange(i + 2, 6).setValue('Error');
+        logAction(emailId, 'LABEL_ERROR', err.message);
+        continue;
+      }
+    } else {
+      logAction(emailId, 'SKIP', 'Claude returned NONE — no labels applied');
+    }
+
+    // Mark for deletion (collect row numbers, delete in reverse to keep indices valid)
+    rowsToDelete.push(i + 2);
+  }
+
+  // Delete rows in reverse order
+  for (var j = rowsToDelete.length - 1; j >= 0; j--) {
+    sheet.deleteRow(rowsToDelete[j]);
+  }
+
+  if (rowsToDelete.length > 0) {
+    logAction('SYSTEM', 'CLAUDE_API_DONE', 'Processed ' + rowsToDelete.length + ' email(s) via Direct Claude API');
   }
 }
 
@@ -357,15 +449,20 @@ function parseLabelsString(labelString) {
 
 /**
  * Manual menu action: Scans inbox and queues emails.
+ * Routes processing based on the current connection_mode.
  * Called via menu: Smart Call Time > Email Sorter > Scan Inbox Now
  */
 function scanInboxNow() {
   var ui = SpreadsheetApp.getUi();
+  var connectionMode = getConfigValue('connection_mode') || 'chat_hub';
 
-  if (String(getConfigValue('hub_registered')).toLowerCase() !== 'true') {
+  // Chat Hub mode requires Hub registration
+  if (connectionMode === 'chat_hub' &&
+      String(getConfigValue('hub_registered')).toLowerCase() !== 'true') {
     ui.alert('Not Registered',
       'This instance is not registered with the Hub.\n\n' +
-      'Register first via:\n  Settings > Register with Hub (via Chat)',
+      'Register first via:\n  Settings > Register with Hub (via Chat)\n\n' +
+      'Or switch to Direct Claude API mode:\n  Settings > Switch Connection Mode',
       ui.ButtonSet.OK);
     return;
   }
@@ -385,14 +482,22 @@ function scanInboxNow() {
     return;
   }
 
-  ui.alert('Emails Queued',
-    'Added ' + added + ' new email(s) to the queue.\n\n' +
-    'They will be posted to Chat one at a time.',
-    ui.ButtonSet.OK);
-
-  // If nothing is currently Posted, post the first one now
-  if (!hasPostedRow(sheet)) {
-    postNextQueuedEmail(sheet);
+  if (connectionMode === 'direct_claude_api') {
+    ui.alert('Emails Queued',
+      'Added ' + added + ' new email(s) to the queue.\n\n' +
+      'Processing now via Direct Claude API...',
+      ui.ButtonSet.OK);
+    processQueueWithClaudeApi(sheet);
+    ui.alert('Done', 'Claude API processing complete. Check the Log sheet for results.', ui.ButtonSet.OK);
+  } else {
+    ui.alert('Emails Queued',
+      'Added ' + added + ' new email(s) to the queue.\n\n' +
+      'They will be posted to Chat one at a time.',
+      ui.ButtonSet.OK);
+    // If nothing is currently Posted, post the first one now
+    if (!hasPostedRow(sheet)) {
+      postNextQueuedEmail(sheet);
+    }
   }
 }
 
