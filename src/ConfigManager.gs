@@ -307,7 +307,7 @@ function notifyHubComplete(emailId) {
 var DEFAULT_CONFIG = {
   label_mode: 'scan_only',
   connection_mode: 'chat_hub',
-  claude_model: 'claude-sonnet-4-5',
+  claude_model: 'claude-sonnet-4-6',
   rate_limit_ms: '3000',
   batch_size: '50',
   version: '1.2.0'

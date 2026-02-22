@@ -8,7 +8,7 @@
  * CONFIG KEYS (set in Config sheet):
  *   connection_mode    - 'direct_claude_api' to activate this module
  *   claude_api_key     - Your Anthropic API key (sk-ant-...)
- *   claude_model       - Model ID (e.g. claude-opus-4-5, claude-sonnet-4-5)
+ *   claude_model       - Model ID (e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5)
  *   claude_system_prompt - System instruction packet sent with every request
  *
  * FLOW (direct_claude_api mode):
@@ -22,16 +22,23 @@
 // AVAILABLE CLAUDE MODELS
 // ============================================================================
 
+// Each entry has: id (API model ID), tier (short label), description (tradeoff info)
 var CLAUDE_MODELS = [
-  'claude-opus-4-5',
-  'claude-sonnet-4-5',
-  'claude-haiku-4-5',
-  'claude-opus-4-0',
-  'claude-sonnet-4-0',
-  'claude-haiku-4-0',
-  'claude-3-5-sonnet-20241022',
-  'claude-3-5-haiku-20241022',
-  'claude-3-opus-20240229'
+  {
+    id: 'claude-opus-4-6',
+    tier: 'Most Capable',
+    description: 'Highest accuracy for complex or ambiguous emails. Slowest and highest cost per email.'
+  },
+  {
+    id: 'claude-sonnet-4-6',
+    tier: 'Balanced — Recommended',
+    description: 'Excellent accuracy at moderate speed and cost. Best choice for most setups.'
+  },
+  {
+    id: 'claude-haiku-4-5',
+    tier: 'Fastest & Cheapest',
+    description: 'Very fast, lowest cost. Great for simple labels and high email volume.'
+  }
 ];
 
 var CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -58,7 +65,7 @@ function callClaudeForLabels(emailId, subject, from, body) {
     return null;
   }
 
-  var model = getConfigValue('claude_model') || 'claude-sonnet-4-5';
+  var model = getConfigValue('claude_model') || 'claude-sonnet-4-6';
   var systemPrompt = getConfigValue('claude_system_prompt') || buildDefaultSystemPrompt();
   var labelsText = getLabelsForNotification();
 
@@ -164,7 +171,7 @@ function showClaudeApiSettings() {
 
   var currentKey = getConfigValue('claude_api_key') || '';
   var maskedKey = currentKey ? currentKey.substring(0, 12) + '...' : '(not set)';
-  var currentModel = getConfigValue('claude_model') || 'claude-sonnet-4-5';
+  var currentModel = getConfigValue('claude_model') || 'claude-sonnet-4-6';
   var currentPrompt = getConfigValue('claude_system_prompt') || '';
 
   var info = [
@@ -217,42 +224,60 @@ function setClaudeApiKey() {
 }
 
 /**
- * Prompts the user to select a Claude model.
+ * Prompts the user to select a Claude model by number or model ID.
+ * Displays each model's tier and trade-off description to help the user choose.
  */
 function setClaudeModel() {
   var ui = SpreadsheetApp.getUi();
-  var current = getConfigValue('claude_model') || 'claude-sonnet-4-5';
+  var current = getConfigValue('claude_model') || 'claude-sonnet-4-6';
 
   var modelList = CLAUDE_MODELS.map(function(m, i) {
-    return (i + 1) + '. ' + m + (m === current ? ' (current)' : '');
-  }).join('\n');
+    var marker = m.id === current ? ' ← current' : '';
+    return (i + 1) + '. ' + m.id + marker + '\n' +
+           '   ' + m.tier + '\n' +
+           '   ' + m.description;
+  }).join('\n\n');
 
   var response = ui.prompt(
     'Select Claude Model',
     'Current model: ' + current + '\n\n' +
-    'Available models:\n' + modelList + '\n\n' +
-    'Enter the model name exactly as shown above\n' +
-    '(e.g. claude-sonnet-4-5):',
+    '─────────────────────────────────────\n' +
+    modelList + '\n' +
+    '─────────────────────────────────────\n\n' +
+    'Enter a number (1–' + CLAUDE_MODELS.length + ') or type a model ID:',
     ui.ButtonSet.OK_CANCEL
   );
 
   if (response.getSelectedButton() !== ui.Button.OK) return;
 
-  var model = response.getResponseText().trim();
-  if (!model) return;
+  var input = response.getResponseText().trim();
+  if (!input) return;
 
-  if (CLAUDE_MODELS.indexOf(model) === -1) {
-    var result = ui.alert(
-      'Unknown Model',
-      '"' + model + '" is not in the known models list.\n\n' +
-      'Save it anyway? (It may still work if it\'s a valid model ID.)',
-      ui.ButtonSet.YES_NO
-    );
-    if (result !== ui.Button.YES) return;
+  var model;
+  var num = parseInt(input, 10);
+  if (!isNaN(num) && num >= 1 && num <= CLAUDE_MODELS.length) {
+    model = CLAUDE_MODELS[num - 1].id;
+  } else {
+    model = input;
+    var known = CLAUDE_MODELS.filter(function(m) { return m.id === model; });
+    if (known.length === 0) {
+      var result = ui.alert(
+        'Unknown Model',
+        '"' + model + '" is not in the recommended list.\n\n' +
+        'Save it anyway? It will work if it\'s a valid Anthropic model ID.',
+        ui.ButtonSet.YES_NO
+      );
+      if (result !== ui.Button.YES) return;
+    }
   }
 
   setConfigValue('claude_model', model);
-  ui.alert('Saved', 'Claude model set to: ' + model, ui.ButtonSet.OK);
+
+  var modelInfo = CLAUDE_MODELS.filter(function(m) { return m.id === model; });
+  var detail = modelInfo.length > 0
+    ? '\n\n' + modelInfo[0].tier + '\n' + modelInfo[0].description
+    : '';
+  ui.alert('Model Updated', 'Claude model set to:\n' + model + detail, ui.ButtonSet.OK);
   logAction('CONFIG', 'CLAUDE_MODEL_SET', 'Model set to: ' + model);
 }
 
@@ -301,7 +326,7 @@ function testClaudeApiConnection() {
     return;
   }
 
-  var model = getConfigValue('claude_model') || 'claude-sonnet-4-5';
+  var model = getConfigValue('claude_model') || 'claude-sonnet-4-6';
 
   ui.alert('Testing...', 'Sending test request to Claude API (' + model + ').\nThis may take a few seconds.', ui.ButtonSet.OK);
 

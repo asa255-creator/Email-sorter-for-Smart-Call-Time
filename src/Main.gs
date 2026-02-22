@@ -40,7 +40,7 @@ function onOpen() {
     .addSubMenu(ui.createMenu('Settings')
       .addItem('Show Configuration', 'showConfig')
       .addSeparator()
-      .addItem('Switch Label Mode (Gmail / Custom)', 'switchLabelModeFromMenu')
+      .addItem('Change Label Setup Mode', 'switchLabelModeFromMenu')
       .addItem('Switch Connection Mode (Chat Hub / Claude API)', 'switchConnectionModeFromMenu')
       .addSeparator()
       .addSubMenu(ui.createMenu('Claude API')
