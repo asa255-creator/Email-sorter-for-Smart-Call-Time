@@ -302,11 +302,15 @@ function notifyHubComplete(emailId) {
 
 /**
  * Default configuration values.
+ * These are written to the Config sheet if the key is not already set.
  */
 var DEFAULT_CONFIG = {
+  label_mode: 'gmail',
+  connection_mode: 'chat_hub',
+  claude_model: 'claude-sonnet-4-5',
   rate_limit_ms: '3000',
   batch_size: '50',
-  version: '1.0.0'
+  version: '1.2.0'
 };
 
 /**

@@ -42,19 +42,30 @@ function createConfigSheet(ss) {
   }
 
   // Default configuration with descriptions
-  // Webhook URLs stored here are read by all modules:
-  // - chat_webhook_url: For posting messages TO Google Chat (registration, notifications, status)
-  // - webhook_url: This instance's deployed web app URL (Hub sends webhooks here)
+  // Sections:
+  //   MODES      - label_mode, connection_mode
+  //   CLAUDE API - claude_api_key, claude_model, claude_system_prompt
+  //   CHAT HUB   - chat_webhook_url, webhook_url, hub_registered
+  //   GENERAL    - instance_name, rate_limit_ms, batch_size, etc.
   var config = [
-    ['chat_webhook_url', 'https://chat.googleapis.com/v1/spaces/AAQAULujEoo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=O3mPCLnQbJzrWcN-qrZGqWBlTiAJbBukWCffMZh1VuQ', 'Webhook URL for Google Chat space. Used to post REGISTER, CONFIRM_COMPLETE, and notification messages.'],
+    // ── Modes ───────────────────────────────────────────────────────────────────
+    ['label_mode', 'gmail', 'Label source: "gmail" = sync from Gmail, "custom" = user-defined labels in Labels sheet.'],
+    ['connection_mode', 'chat_hub', 'AI routing: "chat_hub" = via Google Chat + Hub + Flows, "direct_claude_api" = direct Anthropic API (bypasses Hub).'],
+    // ── Claude API ───────────────────────────────────────────────────────────────
+    ['claude_api_key', '', 'Anthropic API key (sk-ant-...). Required for Direct Claude API mode. Set via Settings > Claude API > Set API Key.'],
+    ['claude_model', 'claude-sonnet-4-5', 'Claude model to use in Direct API mode. Options: claude-opus-4-5, claude-sonnet-4-5, claude-haiku-4-5, etc.'],
+    ['claude_system_prompt', '', 'System prompt / instruction packet sent to Claude. Leave blank to use the built-in default.'],
+    // ── Chat Hub ─────────────────────────────────────────────────────────────────
+    ['chat_webhook_url', 'https://chat.googleapis.com/v1/spaces/AAQAULujEoo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=O3mPCLnQbJzrWcN-qrZGqWBlTiAJbBukWCffMZh1VuQ', 'Webhook URL for Google Chat space. Used in Chat Hub mode to post REGISTER, CONFIRM_COMPLETE, and notification messages.'],
     ['webhook_url', '', 'This instance\'s deployed web app URL. Hub sends webhooks here. Auto-detected on setup, or set via Settings > Set Webhook URL.'],
     ['instance_name', instanceName, 'Auto-generated from your email. Appears in Chat messages so Hub can route to you.'],
     ['hub_registered', 'false', 'Whether this instance is registered with the Hub. Set to true when Hub confirms.'],
+    // ── General ──────────────────────────────────────────────────────────────────
     ['rate_limit_ms', '3000', 'Milliseconds to wait between processing emails in batch mode.'],
     ['batch_size', '50', 'Maximum number of emails to queue at once.'],
     ['last_label_sync', '', 'Timestamp of last Gmail label sync.'],
     ['setup_complete', 'true', 'Whether initial setup has been completed.'],
-    ['version', '1.1.0', 'Version of Smart Call Time installed.']
+    ['version', '1.2.0', 'Version of Smart Call Time installed.']
   ];
 
   sheet.getRange(2, 1, config.length, 3).setValues(config);

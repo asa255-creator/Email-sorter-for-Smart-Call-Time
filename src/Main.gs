@@ -32,12 +32,24 @@ function onOpen() {
       .addItem('Setup / Refresh', 'emailSorterSetup')
       .addSeparator()
       .addItem('Sync Labels Now', 'syncLabelsToSheet')
+      .addItem('Add Custom Label', 'addCustomLabelFromMenu')
       .addItem('Scan Inbox Now', 'scanInboxNow')
       .addSeparator()
       .addItem('Clear Queue', 'clearQueue'))
     .addSeparator()
     .addSubMenu(ui.createMenu('Settings')
       .addItem('Show Configuration', 'showConfig')
+      .addSeparator()
+      .addItem('Switch Label Mode (Gmail / Custom)', 'switchLabelModeFromMenu')
+      .addItem('Switch Connection Mode (Chat Hub / Claude API)', 'switchConnectionModeFromMenu')
+      .addSeparator()
+      .addSubMenu(ui.createMenu('Claude API')
+        .addItem('Show Claude API Settings', 'showClaudeApiSettings')
+        .addItem('Set API Key', 'setClaudeApiKey')
+        .addItem('Select Model', 'setClaudeModel')
+        .addItem('Edit System Prompt', 'setClaudeSystemPrompt')
+        .addItem('Test Claude API Connection', 'testClaudeApiConnection'))
+      .addSeparator()
       .addItem('Set Webhook URL', 'setWebhookUrlFromMenu')
       .addItem('Register with Hub (via Chat)', 'registerWithHubFromMenu')
       .addItem('Refresh All', 'refreshAll'))
@@ -82,15 +94,13 @@ function setupTriggers() {
 
 /**
  * Main setup for Email Sorter module.
- * Creates sheets, syncs labels, sets up triggers, and prompts for instance name.
+ * Creates sheets, prompts for label mode and connection mode, sets up triggers.
  */
 function emailSorterSetup() {
   var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActive();
 
-  ui.alert('Setup Starting',
-    'Creating sheets and syncing Gmail labels...',
-    ui.ButtonSet.OK);
+  ui.alert('Setup Starting', 'Creating sheets and initializing Smart Call Time...', ui.ButtonSet.OK);
 
   // Create all required sheets
   createConfigSheet(ss);
@@ -99,21 +109,46 @@ function emailSorterSetup() {
   createLogSheet(ss);
   createInstructionsSheet(ss);
 
-  // Sync Gmail labels
-  syncLabelsToSheet();
+  // ── LABEL MODE ──────────────────────────────────────────────────────────────
+  var labelMode = promptForLabelMode(ui);
 
-  // Setup triggers
+  if (labelMode === 'gmail') {
+    syncLabelsToSheet();
+  } else {
+    // Custom mode: let the user add labels now or later
+    var addNow = ui.alert(
+      'Custom Label Mode',
+      'You\'ve chosen Custom Label Mode.\n\n' +
+      'Your labels will live in the Labels sheet — you add them yourself.\n' +
+      'Gmail labels are NOT synced automatically.\n\n' +
+      'Would you like to add your first custom label now?',
+      ui.ButtonSet.YES_NO
+    );
+    if (addNow === ui.Button.YES) {
+      addCustomLabelFromMenu();
+    } else {
+      ui.alert('Custom Labels',
+        'You can add labels anytime via:\n' +
+        '  Smart Call Time > Email Sorter > Add Custom Label\n\n' +
+        'Or edit the Labels sheet directly.',
+        ui.ButtonSet.OK);
+    }
+  }
+
+  // ── CONNECTION MODE ──────────────────────────────────────────────────────────
+  promptForConnectionMode(ui);
+
+  // ── GENERAL SETUP ────────────────────────────────────────────────────────────
   setupTriggers();
-
-  // Prompt for instance name if not set
   promptForInstanceName(ui);
 
-  // Detect, verify, and save webhook URL to Config sheet
-  ensureWebhookUrl(ui);
-  verifyWebhookUrl(ui);
-
-  // Offer Hub registration during setup
-  promptForHubRegistration(ui);
+  // Hub / webhook setup is only needed in Chat Hub mode
+  var connectionMode = getConfigValue('connection_mode') || 'chat_hub';
+  if (connectionMode === 'chat_hub') {
+    ensureWebhookUrl(ui);
+    verifyWebhookUrl(ui);
+    promptForHubRegistration(ui);
+  }
 
   // Navigate to Instructions
   var instructionsSheet = ss.getSheetByName('Instructions');
@@ -121,13 +156,181 @@ function emailSorterSetup() {
     ss.setActiveSheet(instructionsSheet);
   }
 
+  var modeDesc = connectionMode === 'direct_claude_api'
+    ? 'Direct Claude API (Hub bypassed)'
+    : 'Chat Hub (via Google Chat)';
+
   ui.alert('Setup Complete!',
     'Email Sorter is ready.\n\n' +
-    '1. Review the Instructions sheet\n' +
-    '2. Configure your Google Flows\n' +
-    '3. Instance name: ' + (getConfigValue('instance_name') || '(not set)') + '\n\n' +
-    'Labels have been synced to the Labels sheet.',
+    'Label Mode:      ' + (labelMode === 'gmail' ? 'Gmail Labels' : 'Custom Labels') + '\n' +
+    'Connection Mode: ' + modeDesc + '\n' +
+    'Instance Name:   ' + (getConfigValue('instance_name') || '(not set)') + '\n\n' +
+    (connectionMode === 'direct_claude_api'
+      ? 'Next: Settings > Claude API > Set API Key'
+      : 'Next: Review the Instructions sheet and configure your Google Flows'),
     ui.ButtonSet.OK);
+}
+
+// ============================================================================
+// LABEL MODE
+// ============================================================================
+
+/**
+ * Prompts the user to choose between Gmail labels or custom labels.
+ * Saves the choice to Config sheet as 'label_mode'.
+ * Returns the chosen mode: 'gmail' or 'custom'.
+ *
+ * @param {Ui} ui - SpreadsheetApp UI
+ * @returns {string} 'gmail' or 'custom'
+ */
+function promptForLabelMode(ui) {
+  var current = getConfigValue('label_mode') || '';
+  var currentDesc = current === 'custom' ? 'Custom' : current === 'gmail' ? 'Gmail' : 'not set';
+
+  var response = ui.alert(
+    'Label Mode',
+    'How do you want to manage labels?\n\n' +
+    '• YES → Gmail Labels\n' +
+    '  Sync labels directly from your Gmail account.\n\n' +
+    '• NO  → Custom Labels\n' +
+    '  Define your own labels freely in the Labels sheet.\n' +
+    '  Gmail labels are NOT used.\n\n' +
+    (current ? 'Current setting: ' + currentDesc : ''),
+    ui.ButtonSet.YES_NO
+  );
+
+  var mode = (response === ui.Button.YES) ? 'gmail' : 'custom';
+  setConfigValue('label_mode', mode);
+  logAction('SYSTEM', 'LABEL_MODE', 'Label mode set to: ' + mode);
+  return mode;
+}
+
+/**
+ * Menu action to switch label mode at any time.
+ */
+function switchLabelModeFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+  var mode = promptForLabelMode(ui);
+
+  if (mode === 'gmail') {
+    syncLabelsToSheet();
+    ui.alert('Label Mode: Gmail',
+      'Labels have been synced from Gmail.\n\n' +
+      'Use Smart Call Time > Email Sorter > Sync Labels Now to refresh anytime.',
+      ui.ButtonSet.OK);
+  } else {
+    ui.alert('Label Mode: Custom',
+      'Custom label mode is active.\n\n' +
+      'Add labels via:\n  Smart Call Time > Email Sorter > Add Custom Label\n\n' +
+      'Or edit the Labels sheet directly (columns A=Name, E=Description).',
+      ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Menu action to add a single custom label to the Labels sheet.
+ * Works in both label modes but is most useful in custom mode.
+ */
+function addCustomLabelFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+
+  var nameResponse = ui.prompt(
+    'Add Custom Label',
+    'Enter the label name.\n' +
+    'This is what will be applied to emails in Gmail.\n\n' +
+    'Example: Work, Personal, Urgent, Follow-Up, Clients',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (nameResponse.getSelectedButton() !== ui.Button.OK) return;
+  var labelName = nameResponse.getResponseText().trim();
+  if (!labelName) return;
+
+  var descResponse = ui.prompt(
+    'Label Description (optional)',
+    'Add a short description to help the AI understand what this label is for.\n\n' +
+    'Example: "Emails from work colleagues or about work projects"\n\n' +
+    'You can leave this blank.',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (descResponse.getSelectedButton() !== ui.Button.OK) return;
+  var description = descResponse.getResponseText().trim();
+
+  // Write to Labels sheet
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Labels');
+  if (!sheet) {
+    ui.alert('Error', 'Labels sheet not found. Run Setup first.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var now = new Date().toISOString();
+  var newRow = [labelName, labelName, '', 'Custom', description, now];
+  sheet.appendRow(newRow);
+
+  logAction('SYSTEM', 'CUSTOM_LABEL_ADD', 'Added custom label: ' + labelName);
+
+  ui.alert('Label Added',
+    'Custom label "' + labelName + '" added to the Labels sheet.\n\n' +
+    (description ? 'Description: ' + description : '(no description)') + '\n\n' +
+    'Note: You must also create this label in Gmail for it to be applied to emails.',
+    ui.ButtonSet.OK);
+}
+
+// ============================================================================
+// CONNECTION MODE
+// ============================================================================
+
+/**
+ * Prompts the user to choose between Chat Hub mode and Direct Claude API mode.
+ * Saves the choice to Config sheet as 'connection_mode'.
+ *
+ * @param {Ui} ui - SpreadsheetApp UI
+ * @returns {string} 'chat_hub' or 'direct_claude_api'
+ */
+function promptForConnectionMode(ui) {
+  var current = getConfigValue('connection_mode') || '';
+
+  var response = ui.alert(
+    'Connection Mode',
+    'How should emails be sent to AI for categorization?\n\n' +
+    '• YES → Chat Hub Mode (current default)\n' +
+    '  Emails are posted to Google Chat.\n' +
+    '  The Hub routes them through Google Flows to an AI.\n' +
+    '  Requires Hub registration and a Chat webhook URL.\n\n' +
+    '• NO  → Direct Claude API Mode\n' +
+    '  Emails are sent directly to the Anthropic Claude API.\n' +
+    '  Bypasses the Hub entirely — no Chat, no Flows needed.\n' +
+    '  Requires your own Anthropic API key.\n\n' +
+    (current ? 'Current: ' + (current === 'direct_claude_api' ? 'Direct Claude API' : 'Chat Hub') : ''),
+    ui.ButtonSet.YES_NO
+  );
+
+  var mode = (response === ui.Button.YES) ? 'chat_hub' : 'direct_claude_api';
+  setConfigValue('connection_mode', mode);
+  logAction('SYSTEM', 'CONNECTION_MODE', 'Connection mode set to: ' + mode);
+
+  if (mode === 'direct_claude_api') {
+    ui.alert('Direct Claude API Mode Selected',
+      'The Hub and Google Chat will NOT be used.\n\n' +
+      'Next steps:\n' +
+      '1. Settings > Claude API > Set API Key\n' +
+      '2. Settings > Claude API > Select Model\n' +
+      '3. (Optional) Settings > Claude API > Edit System Prompt\n' +
+      '4. Settings > Claude API > Test Claude API Connection',
+      ui.ButtonSet.OK);
+  }
+
+  return mode;
+}
+
+/**
+ * Menu action to switch connection mode at any time.
+ */
+function switchConnectionModeFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+  promptForConnectionMode(ui);
 }
 
 /**
@@ -450,15 +653,31 @@ function authorize() {
 function showConfig() {
   var ui = SpreadsheetApp.getUi();
 
+  var connectionMode = getConfigValue('connection_mode') || 'chat_hub';
+  var labelMode = getConfigValue('label_mode') || 'gmail';
+  var apiKey = getConfigValue('claude_api_key') || '';
+  var maskedKey = apiKey ? apiKey.substring(0, 12) + '...' : '(not set)';
+
   var config = [
-    'Instance Name: ' + (getConfigValue('instance_name') || '(not set)'),
-    'Chat Webhook: ' + (getChatWebhookUrl() ? 'Set' : 'NOT SET'),
-    'Webhook URL: ' + (getWebhookUrl() || '(not set)'),
-    'Hub Registered: ' + (getConfigValue('hub_registered') || 'false'),
+    '── General ──',
+    'Instance Name:    ' + (getConfigValue('instance_name') || '(not set)'),
+    'Label Mode:       ' + (labelMode === 'custom' ? 'Custom Labels' : 'Gmail Labels'),
+    'Connection Mode:  ' + (connectionMode === 'direct_claude_api' ? 'Direct Claude API' : 'Chat Hub'),
     '',
-    'Rate Limit: ' + (getConfigValue('rate_limit_ms') || '3000') + 'ms',
-    'Batch Size: ' + (getConfigValue('batch_size') || '50'),
-    'Last Label Sync: ' + (getConfigValue('last_label_sync') || 'Never'),
+    '── Claude API (direct mode) ──',
+    'API Key:          ' + maskedKey,
+    'Model:            ' + (getConfigValue('claude_model') || 'claude-sonnet-4-5'),
+    'System Prompt:    ' + (getConfigValue('claude_system_prompt') ? 'Custom (set)' : 'Default'),
+    '',
+    '── Chat Hub ──',
+    'Chat Webhook:     ' + (getChatWebhookUrl() ? 'Set' : 'NOT SET'),
+    'Webhook URL:      ' + (getWebhookUrl() || '(not set)'),
+    'Hub Registered:   ' + (getConfigValue('hub_registered') || 'false'),
+    '',
+    '── Processing ──',
+    'Rate Limit:       ' + (getConfigValue('rate_limit_ms') || '3000') + 'ms',
+    'Batch Size:       ' + (getConfigValue('batch_size') || '50'),
+    'Last Label Sync:  ' + (getConfigValue('last_label_sync') || 'Never'),
   ].join('\n');
 
   ui.alert('Configuration', config, ui.ButtonSet.OK);
