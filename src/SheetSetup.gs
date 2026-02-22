@@ -49,7 +49,7 @@ function createConfigSheet(ss) {
   //   GENERAL    - instance_name, rate_limit_ms, batch_size, etc.
   var config = [
     // ── Modes ───────────────────────────────────────────────────────────────────
-    ['label_mode', 'gmail', 'Label source: "gmail" = sync from Gmail, "custom" = user-defined labels in Labels sheet.'],
+    ['label_mode', 'scan_only', 'Label setup mode: "scan_only" = sync existing Gmail labels, "add_and_scan" = also create new labels during setup.'],
     ['connection_mode', 'chat_hub', 'AI routing: "chat_hub" = via Google Chat + Hub + Flows, "direct_claude_api" = direct Anthropic API (bypasses Hub).'],
     // ── Claude API ───────────────────────────────────────────────────────────────
     ['claude_api_key', '', 'Anthropic API key (sk-ant-...). Required for Direct Claude API mode. Set via Settings > Claude API > Set API Key.'],

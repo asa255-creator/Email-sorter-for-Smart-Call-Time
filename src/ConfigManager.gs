@@ -305,7 +305,7 @@ function notifyHubComplete(emailId) {
  * These are written to the Config sheet if the key is not already set.
  */
 var DEFAULT_CONFIG = {
-  label_mode: 'gmail',
+  label_mode: 'scan_only',
   connection_mode: 'chat_hub',
   claude_model: 'claude-sonnet-4-5',
   rate_limit_ms: '3000',

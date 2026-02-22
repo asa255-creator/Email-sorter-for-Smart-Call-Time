@@ -112,26 +112,19 @@ function emailSorterSetup() {
   // ── LABEL MODE ──────────────────────────────────────────────────────────────
   var labelMode = promptForLabelMode(ui);
 
-  if (labelMode === 'gmail') {
-    syncLabelsToSheet();
-  } else {
-    // Custom mode: let the user add labels now or later
+  // Always sync existing Gmail labels into the Labels sheet
+  syncLabelsToSheet();
+
+  if (labelMode === 'add_and_scan') {
+    // Offer to add new labels to Gmail now
     var addNow = ui.alert(
-      'Custom Label Mode',
-      'You\'ve chosen Custom Label Mode.\n\n' +
-      'Your labels will live in the Labels sheet — you add them yourself.\n' +
-      'Gmail labels are NOT synced automatically.\n\n' +
-      'Would you like to add your first custom label now?',
+      'Add Labels',
+      'Your existing Gmail labels have been synced.\n\n' +
+      'Would you like to add a new label to Gmail now?',
       ui.ButtonSet.YES_NO
     );
     if (addNow === ui.Button.YES) {
       addCustomLabelFromMenu();
-    } else {
-      ui.alert('Custom Labels',
-        'You can add labels anytime via:\n' +
-        '  Smart Call Time > Email Sorter > Add Custom Label\n\n' +
-        'Or edit the Labels sheet directly.',
-        ui.ButtonSet.OK);
     }
   }
 
@@ -162,7 +155,7 @@ function emailSorterSetup() {
 
   ui.alert('Setup Complete!',
     'Email Sorter is ready.\n\n' +
-    'Label Mode:      ' + (labelMode === 'gmail' ? 'Gmail Labels' : 'Custom Labels') + '\n' +
+    'Label Mode:      ' + (labelMode === 'add_and_scan' ? 'Add & Scan' : 'Scan Only') + '\n' +
     'Connection Mode: ' + modeDesc + '\n' +
     'Instance Name:   ' + (getConfigValue('instance_name') || '(not set)') + '\n\n' +
     (connectionMode === 'direct_claude_api'
@@ -176,53 +169,62 @@ function emailSorterSetup() {
 // ============================================================================
 
 /**
- * Prompts the user to choose between Gmail labels or custom labels.
+ * Prompts the user to choose how labels are populated during setup.
+ * Both options always use Gmail labels for ongoing operation.
  * Saves the choice to Config sheet as 'label_mode'.
- * Returns the chosen mode: 'gmail' or 'custom'.
+ * Returns the chosen mode: 'add_and_scan' or 'scan_only'.
  *
  * @param {Ui} ui - SpreadsheetApp UI
- * @returns {string} 'gmail' or 'custom'
+ * @returns {string} 'add_and_scan' or 'scan_only'
  */
 function promptForLabelMode(ui) {
   var current = getConfigValue('label_mode') || '';
-  var currentDesc = current === 'custom' ? 'Custom' : current === 'gmail' ? 'Gmail' : 'not set';
+  var currentDesc = current === 'add_and_scan' ? 'Add & Scan' : current === 'scan_only' ? 'Scan Only' : 'not set';
 
   var response = ui.alert(
-    'Label Mode',
-    'How do you want to manage labels?\n\n' +
-    '• YES → Gmail Labels\n' +
-    '  Sync labels directly from your Gmail account.\n\n' +
-    '• NO  → Custom Labels\n' +
-    '  Define your own labels freely in the Labels sheet.\n' +
-    '  Gmail labels are NOT used.\n\n' +
+    'Label Setup',
+    'Labels are always synced from Gmail. How do you want to set them up now?\n\n' +
+    '• YES → Add & Scan\n' +
+    '  Sync your existing Gmail labels AND add new ones now.\n\n' +
+    '• NO  → Scan Only\n' +
+    '  Sync your existing Gmail labels into the Labels sheet.\n' +
+    '  You can add labels in Gmail and re-sync anytime.\n\n' +
     (current ? 'Current setting: ' + currentDesc : ''),
     ui.ButtonSet.YES_NO
   );
 
-  var mode = (response === ui.Button.YES) ? 'gmail' : 'custom';
+  var mode = (response === ui.Button.YES) ? 'add_and_scan' : 'scan_only';
   setConfigValue('label_mode', mode);
   logAction('SYSTEM', 'LABEL_MODE', 'Label mode set to: ' + mode);
   return mode;
 }
 
 /**
- * Menu action to switch label mode at any time.
+ * Menu action to update the label setup mode at any time.
+ * Both modes always use Gmail labels; the choice only affects
+ * whether new labels are added during the setup step.
  */
 function switchLabelModeFromMenu() {
   var ui = SpreadsheetApp.getUi();
   var mode = promptForLabelMode(ui);
 
-  if (mode === 'gmail') {
-    syncLabelsToSheet();
-    ui.alert('Label Mode: Gmail',
-      'Labels have been synced from Gmail.\n\n' +
-      'Use Smart Call Time > Email Sorter > Sync Labels Now to refresh anytime.',
-      ui.ButtonSet.OK);
+  // Always sync existing Gmail labels regardless of mode
+  syncLabelsToSheet();
+
+  if (mode === 'add_and_scan') {
+    var addNow = ui.alert(
+      'Add Labels',
+      'Your Gmail labels have been synced.\n\n' +
+      'Would you like to add a new label to Gmail now?',
+      ui.ButtonSet.YES_NO
+    );
+    if (addNow === ui.Button.YES) {
+      addCustomLabelFromMenu();
+    }
   } else {
-    ui.alert('Label Mode: Custom',
-      'Custom label mode is active.\n\n' +
-      'Add labels via:\n  Smart Call Time > Email Sorter > Add Custom Label\n\n' +
-      'Or edit the Labels sheet directly (columns A=Name, E=Description).',
+    ui.alert('Labels Synced',
+      'Your Gmail labels have been synced to the Labels sheet.\n\n' +
+      'Use Smart Call Time > Email Sorter > Sync Labels Now to refresh anytime.',
       ui.ButtonSet.OK);
   }
 }
