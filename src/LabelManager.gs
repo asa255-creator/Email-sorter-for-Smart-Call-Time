@@ -173,7 +173,42 @@ function getLabelsFromSheet() {
 // ============================================================================
 
 /**
+ * Expands a list of label names to include all ancestor labels.
+ *
+ * Gmail treats nested labels (e.g. "Work/Urgent") as fully separate
+ * label objects with no automatic parent-linking. This helper ensures
+ * that when a sub-label is applied, every ancestor label is also queued
+ * for application.
+ *
+ * Examples:
+ *   ["Work/Urgent"]              → ["Work", "Work/Urgent"]
+ *   ["Clients/VIP/Urgent"]       → ["Clients", "Clients/VIP", "Clients/VIP/Urgent"]
+ *   ["Work/Urgent", "Work/Dev"]  → ["Work", "Work/Urgent", "Work/Dev"]  (Work deduplicated)
+ *   ["Personal"]                 → ["Personal"]  (top-level, unchanged)
+ *
+ * @param {string[]} labelNames - Array of label names (may include nested paths)
+ * @returns {string[]} Deduplicated array including all ancestor labels
+ */
+function expandLabelAncestors(labelNames) {
+  const expanded = new Set();
+
+  labelNames.forEach(labelName => {
+    if (!labelName || labelName.trim() === '' || labelName.toUpperCase() === 'NONE') {
+      return;
+    }
+    const parts = labelName.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      expanded.add(parts.slice(0, i).join('/'));
+    }
+  });
+
+  return Array.from(expanded);
+}
+
+/**
  * Applies labels to an email thread.
+ * Automatically applies all ancestor labels for any nested label paths
+ * (e.g. "Work/Urgent" also applies "Work").
  * @param {string} emailId - The Gmail message ID
  * @param {string[]} labelNames - Array of label names to apply
  * @returns {Object} Result with applied and notFound arrays
@@ -194,11 +229,14 @@ function applyLabelsToEmail(emailId, labelNames) {
     labelMap[label.getName().toLowerCase()] = label;
   });
 
+  // Expand nested labels to include all ancestor labels before applying
+  const expandedLabelNames = expandLabelAncestors(labelNames);
+
   const applied = [];
   const notFound = [];
 
   // Apply each label
-  labelNames.forEach(labelName => {
+  expandedLabelNames.forEach(labelName => {
     // Skip empty or NONE
     if (!labelName || labelName.trim() === '' || labelName.toUpperCase() === 'NONE') {
       return;
