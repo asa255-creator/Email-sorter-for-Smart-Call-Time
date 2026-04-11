@@ -73,36 +73,57 @@ function callClaudeForLabels(emailId, subject, from, body) {
 
   logAction(emailId, 'CLAUDE_SENDING', 'Calling Claude API (' + model + ')');
 
+  var payload = {
+    model: model,
+    max_tokens: 256,
+    system: systemPrompt,
+    messages: [
+      { role: 'user', content: userMessage }
+    ]
+  };
+
+  var options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': CLAUDE_API_VERSION
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  // --- Network fetch (retryable failures) ---
+  var response, code, raw;
   try {
-    var payload = {
-      model: model,
-      max_tokens: 256,
-      system: systemPrompt,
-      messages: [
-        { role: 'user', content: userMessage }
-      ]
-    };
+    response = UrlFetchApp.fetch(CLAUDE_API_URL, options);
+    code = response.getResponseCode();
+    raw = response.getContentText();
+  } catch (fetchError) {
+    logAction(emailId, 'CLAUDE_ERROR', 'Network error: ' + fetchError.message);
+    return null;
+  }
 
-    var options = {
-      method: 'post',
-      contentType: 'application/json',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': CLAUDE_API_VERSION
-      },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    };
+  // --- Fatal API errors: stop ALL queue processing immediately ---
+  // 401 = bad/expired API key, 403 = permission denied (credit limit),
+  // 429 = rate limit / credit quota exceeded.
+  // Throwing here propagates up through processQueueWithClaudeApi which
+  // catches FATAL_API_ERROR and breaks out of the loop entirely so no
+  // further credits are consumed.
+  if (code === 401 || code === 403 || code === 429) {
+    var fatalMsg = 'HTTP ' + code + ' — ' + raw.substring(0, 200);
+    logAction(emailId, 'CLAUDE_FATAL',
+      fatalMsg + ' | Processing halted to prevent further credit use.');
+    throw new Error('FATAL_API_ERROR: ' + fatalMsg);
+  }
 
-    var response = UrlFetchApp.fetch(CLAUDE_API_URL, options);
-    var code = response.getResponseCode();
-    var raw = response.getContentText();
+  if (code !== 200) {
+    logAction(emailId, 'CLAUDE_ERROR', 'HTTP ' + code + ': ' + raw.substring(0, 300));
+    return null;
+  }
 
-    if (code !== 200) {
-      logAction(emailId, 'CLAUDE_ERROR', 'HTTP ' + code + ': ' + raw.substring(0, 300));
-      return null;
-    }
-
+  // --- Parse successful response ---
+  try {
     var result = JSON.parse(raw);
     var labelText = result.content && result.content[0] && result.content[0].text
       ? result.content[0].text.trim()
@@ -110,9 +131,8 @@ function callClaudeForLabels(emailId, subject, from, body) {
 
     logAction(emailId, 'CLAUDE_RESPONSE', labelText.substring(0, 200));
     return labelText || 'NONE';
-
-  } catch (error) {
-    logAction(emailId, 'CLAUDE_ERROR', error.message);
+  } catch (parseError) {
+    logAction(emailId, 'CLAUDE_ERROR', 'Failed to parse API response: ' + parseError.message);
     return null;
   }
 }
