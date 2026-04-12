@@ -78,6 +78,23 @@ function getLabelByName(labelName) {
   return null;
 }
 
+/**
+ * Gets a label by name, creating it in Gmail if it doesn't exist yet.
+ * Used for the none_label fallback so emails that don't match any
+ * configured label still get marked and won't loop back into the queue.
+ *
+ * @param {string} labelName - The label name
+ * @returns {GmailLabel} The existing or newly-created Gmail label
+ */
+function getOrCreateLabel(labelName) {
+  var existing = getLabelByName(labelName);
+  if (existing) return existing;
+
+  var created = GmailApp.createLabel(labelName);
+  logAction('SYSTEM', 'LABEL_CREATED', 'Auto-created label in Gmail: ' + labelName);
+  return created;
+}
+
 // ============================================================================
 // LABEL SYNCING
 // ============================================================================

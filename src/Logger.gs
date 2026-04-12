@@ -19,9 +19,26 @@
  */
 function logAction(emailId, action, details, result = '', notes = '') {
   const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName('Log');
+  let sheet = ss.getSheetByName('Log');
 
-  if (!sheet) return;
+  if (!sheet) {
+    // Auto-create the Log sheet rather than silently dropping log entries.
+    // This recovers from accidental deletion without any user intervention.
+    try {
+      sheet = ss.insertSheet('Log');
+      sheet.getRange(1, 1, 1, 6).setValues([
+        ['Timestamp', 'Email ID', 'Action', 'Details', 'Result', 'Notes']
+      ]);
+      sheet.setFrozenRows(1);
+      console.warn('[Logger] Log sheet was missing — recreated it automatically.');
+    } catch (createErr) {
+      // Last-resort fallback: at least surface the original entry in the Apps
+      // Script execution log so it isn't lost entirely.
+      console.error('[Logger] Could not create Log sheet: ' + createErr.message +
+        ' | Original entry: ' + action + ' | ' + emailId + ' | ' + details);
+      return;
+    }
+  }
 
   const timestamp = new Date().toISOString();
   const lastRow = sheet.getLastRow();

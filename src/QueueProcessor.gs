@@ -84,14 +84,23 @@ function checkInboxAndPostNext() {
 // DIRECT CLAUDE API PROCESSING
 // ============================================================================
 
+// Maximum number of times a single email may be retried after an API failure
+// before it is abandoned (left as "Error" for manual review).
+var MAX_CLAUDE_RETRIES = 3;
+
 /**
- * Processes all Queued emails using the Claude API directly.
- * For each Queued row:
+ * Processes Queued (and previously-failed Error) emails using the Claude API.
+ * For each eligible row:
  *   1. Calls callClaudeForLabels()
  *   2. Applies the returned labels to the Gmail thread
- *   3. Deletes the Queue row
+ *   3. Deletes the Queue row on success
  *
- * Skips rows that don't have Status = "Queued".
+ * Column E (index 4) is used as a retry counter so that transient failures
+ * don't leave emails stuck permanently.  After MAX_CLAUDE_RETRIES attempts the
+ * row is left as "Error" and skipped until the user clears the queue manually.
+ *
+ * If callClaudeForLabels throws FATAL_API_ERROR (HTTP 401/403/429 — bad key or
+ * credit exhaustion) the loop aborts immediately so no further credits are used.
  *
  * @param {Sheet} sheet - The Queue sheet
  */
@@ -103,24 +112,50 @@ function processQueueWithClaudeApi(sheet) {
   var rowsToDelete = [];
 
   for (var i = 0; i < data.length; i++) {
-    if (data[i][5] !== 'Queued') continue;
+    var status     = data[i][5]; // Column F
+    var retryCount = parseInt(data[i][4]) || 0; // Column E — retry counter
+
+    // Process "Queued" rows always; process "Error" rows only if under the retry cap.
+    if (status === 'Queued') {
+      // Reset retry count for freshly-queued rows (shouldn't be non-zero, but be safe)
+      retryCount = 0;
+    } else if (status === 'Error' && retryCount < MAX_CLAUDE_RETRIES) {
+      // Eligible for another attempt — fall through to processing below
+    } else {
+      // Skip: wrong status, or Error rows that have hit the retry limit
+      continue;
+    }
 
     var emailId = data[i][0];
     var subject = data[i][1];
     var from    = data[i][2];
     var context = data[i][7]; // Full email body stored in Context column
 
-    // Extract body from context string (built by buildEmailContext)
-    var body = context || '';
+    logAction(emailId, 'CLAUDE_API_START',
+      'Processing via Direct Claude API' + (retryCount > 0 ? ' (retry ' + retryCount + ')' : ''));
 
-    logAction(emailId, 'CLAUDE_API_START', 'Processing via Direct Claude API');
-
-    var labelText = callClaudeForLabels(emailId, subject, from, body);
+    var labelText;
+    try {
+      labelText = callClaudeForLabels(emailId, subject, from, context || '');
+    } catch (apiError) {
+      if (apiError.message.indexOf('FATAL_API_ERROR') === 0) {
+        // Credit exhaustion or bad API key — stop immediately, don't touch
+        // remaining rows so they stay "Queued" and can be picked up later.
+        logAction('SYSTEM', 'PROCESS_ABORT',
+          'Queue processing halted due to fatal API error: ' + apiError.message);
+        break;
+      }
+      // Unexpected non-fatal throw — treat same as a null return
+      labelText = null;
+    }
 
     if (labelText === null) {
-      // API call failed — mark as Error and move on
-      sheet.getRange(i + 2, 6).setValue('Error');
-      logAction(emailId, 'CLAUDE_API_FAIL', 'No response from Claude — marked as Error');
+      // Transient failure — increment retry count and leave as Error
+      retryCount += 1;
+      sheet.getRange(i + 2, 5).setValue(retryCount); // Column E
+      sheet.getRange(i + 2, 6).setValue('Error');     // Column F
+      logAction(emailId, 'CLAUDE_API_FAIL',
+        'No response from Claude — retry ' + retryCount + '/' + MAX_CLAUDE_RETRIES);
       continue;
     }
 
@@ -130,26 +165,50 @@ function processQueueWithClaudeApi(sheet) {
       try {
         applyLabelsToEmail(emailId, labels);
         logAction(emailId, 'LABELED', 'Applied (Claude API): ' + labels.join(', '));
-      } catch (err) {
+      } catch (labelErr) {
+        retryCount += 1;
+        sheet.getRange(i + 2, 5).setValue(retryCount);
         sheet.getRange(i + 2, 6).setValue('Error');
-        logAction(emailId, 'LABEL_ERROR', err.message);
+        logAction(emailId, 'LABEL_ERROR', labelErr.message +
+          ' — retry ' + retryCount + '/' + MAX_CLAUDE_RETRIES);
         continue;
       }
     } else {
-      logAction(emailId, 'SKIP', 'Claude returned NONE — no labels applied');
+      // Claude returned NONE — no configured label matched this email.
+      //
+      // Apply the label named in Config key 'none_label' (default: "Needs Review").
+      // This label is intentionally kept OUT of the Labels sheet so Claude never
+      // sees it as a choice — it is applied by the code only as a last resort.
+      //
+      // The label is auto-created in Gmail if it doesn't exist yet.
+      // Marking the row Skipped keeps it in the queue so getExistingQueueIds()
+      // prevents this email from being re-added on the next scan.
+      var noneLabel = getConfigValue('none_label') || 'Needs Review';
+      try {
+        var gmailLabel = getOrCreateLabel(noneLabel);
+        GmailApp.getMessageById(emailId).getThread().addLabel(gmailLabel);
+        logAction(emailId, 'NONE_LABEL',
+          'No label matched — applied "' + noneLabel + '" from Config none_label');
+      } catch (noneErr) {
+        logAction(emailId, 'NONE_ERROR',
+          'Could not apply none_label "' + noneLabel + '": ' + noneErr.message);
+      }
+      sheet.getRange(i + 2, 6).setValue('Skipped');
+      continue;
     }
 
-    // Mark for deletion (collect row numbers, delete in reverse to keep indices valid)
+    // Mark for deletion (collected and applied in reverse order to preserve indices)
     rowsToDelete.push(i + 2);
   }
 
-  // Delete rows in reverse order
+  // Delete successfully-processed rows in reverse order
   for (var j = rowsToDelete.length - 1; j >= 0; j--) {
     sheet.deleteRow(rowsToDelete[j]);
   }
 
   if (rowsToDelete.length > 0) {
-    logAction('SYSTEM', 'CLAUDE_API_DONE', 'Processed ' + rowsToDelete.length + ' email(s) via Direct Claude API');
+    logAction('SYSTEM', 'CLAUDE_API_DONE',
+      'Processed ' + rowsToDelete.length + ' email(s) via Direct Claude API');
   }
 }
 
@@ -167,8 +226,11 @@ function processQueueWithClaudeApi(sheet) {
 function scanInboxForNewEmails(sheet) {
   var batchSize = parseInt(getConfigValue('batch_size') || '50');
 
+  // Restrict to inbox only. Without "in:inbox", the search hits Sent mail,
+  // All Mail, Promotions, and every other folder — potentially thousands of
+  // historical emails the user never wanted processed.
   try {
-    var threads = GmailApp.search('has:nouserlabels', 0, batchSize);
+    var threads = GmailApp.search('has:nouserlabels in:inbox', 0, batchSize);
   } catch (error) {
     logAction('SYSTEM', 'INBOX_ERROR', 'Gmail search failed: ' + error.message);
     return 0;

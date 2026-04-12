@@ -43,6 +43,11 @@ var CLAUDE_MODELS = [
 
 var CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 var CLAUDE_API_VERSION = '2023-06-01';
+// Prompt caching beta header — tells Anthropic to cache the system prompt and
+// labels list across calls so they're only charged once per cache lifetime
+// (~5 minutes) rather than on every email.  Safe to include even if content
+// is too short to qualify; the API simply ignores cache_control in that case.
+var CLAUDE_BETA_HEADER = 'prompt-caching-2024-07-31';
 
 // ============================================================================
 // MAIN ENTRY POINT
@@ -69,40 +74,79 @@ function callClaudeForLabels(emailId, subject, from, body) {
   var systemPrompt = getConfigValue('claude_system_prompt') || buildDefaultSystemPrompt();
   var labelsText = getLabelsForNotification();
 
-  var userMessage = buildEmailPrompt(labelsText, emailId, subject, from, body);
+  var userMessage = buildEmailPrompt(emailId, subject, from, body);
 
   logAction(emailId, 'CLAUDE_SENDING', 'Calling Claude API (' + model + ')');
 
-  try {
-    var payload = {
-      model: model,
-      max_tokens: 256,
-      system: systemPrompt,
-      messages: [
-        { role: 'user', content: userMessage }
-      ]
-    };
-
-    var options = {
-      method: 'post',
-      contentType: 'application/json',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': CLAUDE_API_VERSION
+  // The system prompt and labels list are identical on every call.
+  // Marking them with cache_control tells Anthropic to cache them so
+  // subsequent calls are charged ~10% of the normal input token price
+  // for those blocks instead of 100%.  This is the largest cost lever
+  // in the whole system — the system prompt + labels can be 200-800 tokens
+  // that would otherwise be billed fresh on every single email.
+  var payload = {
+    model: model,
+    max_tokens: 256,
+    system: [
+      {
+        type: 'text',
+        text: systemPrompt,
+        cache_control: { type: 'ephemeral' }
       },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    };
+      {
+        type: 'text',
+        text: '===== AVAILABLE LABELS =====\n' + (labelsText || '(no labels configured)'),
+        cache_control: { type: 'ephemeral' }
+      }
+    ],
+    messages: [
+      { role: 'user', content: userMessage }
+    ]
+  };
 
-    var response = UrlFetchApp.fetch(CLAUDE_API_URL, options);
-    var code = response.getResponseCode();
-    var raw = response.getContentText();
+  var options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': CLAUDE_API_VERSION,
+      'anthropic-beta': CLAUDE_BETA_HEADER
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
 
-    if (code !== 200) {
-      logAction(emailId, 'CLAUDE_ERROR', 'HTTP ' + code + ': ' + raw.substring(0, 300));
-      return null;
-    }
+  // --- Network fetch (retryable failures) ---
+  var response, code, raw;
+  try {
+    response = UrlFetchApp.fetch(CLAUDE_API_URL, options);
+    code = response.getResponseCode();
+    raw = response.getContentText();
+  } catch (fetchError) {
+    logAction(emailId, 'CLAUDE_ERROR', 'Network error: ' + fetchError.message);
+    return null;
+  }
 
+  // --- Fatal API errors: stop ALL queue processing immediately ---
+  // 401 = bad/expired API key, 403 = permission denied (credit limit),
+  // 429 = rate limit / credit quota exceeded.
+  // Throwing here propagates up through processQueueWithClaudeApi which
+  // catches FATAL_API_ERROR and breaks out of the loop entirely so no
+  // further credits are consumed.
+  if (code === 401 || code === 403 || code === 429) {
+    var fatalMsg = 'HTTP ' + code + ' — ' + raw.substring(0, 200);
+    logAction(emailId, 'CLAUDE_FATAL',
+      fatalMsg + ' | Processing halted to prevent further credit use.');
+    throw new Error('FATAL_API_ERROR: ' + fatalMsg);
+  }
+
+  if (code !== 200) {
+    logAction(emailId, 'CLAUDE_ERROR', 'HTTP ' + code + ': ' + raw.substring(0, 300));
+    return null;
+  }
+
+  // --- Parse successful response ---
+  try {
     var result = JSON.parse(raw);
     var labelText = result.content && result.content[0] && result.content[0].text
       ? result.content[0].text.trim()
@@ -110,9 +154,8 @@ function callClaudeForLabels(emailId, subject, from, body) {
 
     logAction(emailId, 'CLAUDE_RESPONSE', labelText.substring(0, 200));
     return labelText || 'NONE';
-
-  } catch (error) {
-    logAction(emailId, 'CLAUDE_ERROR', error.message);
+  } catch (parseError) {
+    logAction(emailId, 'CLAUDE_ERROR', 'Failed to parse API response: ' + parseError.message);
     return null;
   }
 }
@@ -122,19 +165,20 @@ function callClaudeForLabels(emailId, subject, from, body) {
 // ============================================================================
 
 /**
- * Builds the user-facing prompt containing labels and email content.
+ * Builds the per-email user message.
  *
- * @param {string} labelsText - Formatted label list from Labels sheet
- * @param {string} emailId    - Gmail message ID
- * @param {string} subject    - Email subject
- * @param {string} from       - Sender address
- * @param {string} body       - Email body (plain text)
- * @returns {string} Full user prompt
+ * The available labels list is no longer included here — it lives in the
+ * cached system prompt block so it isn't billed as fresh input tokens on
+ * every single call.
+ *
+ * @param {string} emailId - Gmail message ID
+ * @param {string} subject - Email subject
+ * @param {string} from    - Sender address
+ * @param {string} body    - Email body (plain text, may be truncated)
+ * @returns {string} User message for this email
  */
-function buildEmailPrompt(labelsText, emailId, subject, from, body) {
-  return '===== AVAILABLE LABELS =====\n' +
-    (labelsText || '(no labels configured)') +
-    '\n\n===== EMAIL TO CATEGORIZE =====\n' +
+function buildEmailPrompt(emailId, subject, from, body) {
+  return '===== EMAIL TO CATEGORIZE =====\n' +
     'Email ID: ' + emailId + '\n' +
     'Subject: ' + subject + '\n' +
     'From: ' + from + '\n\n' +
