@@ -596,12 +596,27 @@ function refreshTables() {
     added.push('(Log sheet recreated)');
   }
 
-  // ── 3. Warn about missing Queue / Labels sheets (can't recreate safely) ──────
+  // ── 3. Queue sheet — check existence and restore row count if shrunk ─────────
   var missingSheets = [];
-  if (!ss.getSheetByName('Queue'))  missingSheets.push('Queue');
+  var queueSheet = ss.getSheetByName('Queue');
+  if (!queueSheet) {
+    missingSheets.push('Queue');
+  } else {
+    // Each successful email processing calls sheet.deleteRow(), and clearQueue()
+    // previously called sheet.deleteRows() — both physically shrink the sheet.
+    // If the sheet has fewer than 200 rows remaining it may not have enough room
+    // to write the next batch of emails. Restore it to 1000 rows.
+    var queueMaxRows = queueSheet.getMaxRows();
+    if (queueMaxRows < 200) {
+      queueSheet.insertRowsAfter(queueMaxRows, 1000 - queueMaxRows);
+      added.push('(Queue sheet expanded: was ' + queueMaxRows + ' rows, restored to 1000)');
+    }
+  }
+
+  // ── 4. Labels sheet ──────────────────────────────────────────────────────────
   if (!ss.getSheetByName('Labels')) missingSheets.push('Labels');
 
-  // ── 4. Log and report ────────────────────────────────────────────────────────
+  // ── 5. Log and report ────────────────────────────────────────────────────────
   logAction('SYSTEM', 'REFRESH_TABLES',
     'Added ' + added.length + ' missing item(s): ' + (added.join(', ') || 'none'));
 

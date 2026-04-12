@@ -264,6 +264,15 @@ function scanInboxForNewEmails(sheet) {
   if (newRows.length === 0) return 0;
 
   var startRow = sheet.getLastRow() + 1;
+
+  // Sheet rows shrink every time deleteRow() is called (successful processing)
+  // or deleteRows() is called (clearQueue). Auto-expand before writing so
+  // getRange() never exceeds the sheet's physical row count.
+  var rowsNeeded = startRow + newRows.length - 1;
+  if (rowsNeeded > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), rowsNeeded - sheet.getMaxRows() + 100);
+  }
+
   sheet.getRange(startRow, 1, newRows.length, 8).setValues(newRows);
 
   return newRows.length;
@@ -581,7 +590,10 @@ function clearQueue() {
   if (response === ui.Button.YES) {
     var lastRow = sheet.getLastRow();
     if (lastRow > 1) {
-      sheet.deleteRows(2, lastRow - 1);
+      // Clear content instead of deleting rows. deleteRows() physically shrinks
+      // the sheet each time, which eventually causes getRange() to throw
+      // "coordinates outside dimensions" when new emails are added.
+      sheet.getRange(2, 1, lastRow - 1, 8).clear();
     }
     ui.alert('Queue Cleared', 'The queue has been cleared.', ui.ButtonSet.OK);
     logAction('SYSTEM', 'CLEAR', 'Queue cleared');
