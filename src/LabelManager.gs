@@ -78,6 +78,24 @@ function getLabelByName(labelName) {
   return null;
 }
 
+/**
+ * Gets a label by name, creating it in Gmail if it doesn't exist yet.
+ * Used for the catch-all label so emails that don't match any configured
+ * label still get marked and won't be re-queued on the next timer run.
+ *
+ * @param {string} labelName - The label name (may be nested, e.g. "Smart-CT/Reviewed")
+ * @returns {GmailLabel} The existing or newly-created Gmail label
+ */
+function getOrCreateLabel(labelName) {
+  var existing = getLabelByName(labelName);
+  if (existing) return existing;
+
+  var created = GmailApp.createLabel(labelName);
+  logAction('SYSTEM', 'LABEL_CREATED',
+    'Auto-created catch-all label in Gmail: ' + labelName);
+  return created;
+}
+
 // ============================================================================
 // LABEL SYNCING
 // ============================================================================

@@ -43,6 +43,11 @@ var CLAUDE_MODELS = [
 
 var CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 var CLAUDE_API_VERSION = '2023-06-01';
+// Prompt caching beta header — tells Anthropic to cache the system prompt and
+// labels list across calls so they're only charged once per cache lifetime
+// (~5 minutes) rather than on every email.  Safe to include even if content
+// is too short to qualify; the API simply ignores cache_control in that case.
+var CLAUDE_BETA_HEADER = 'prompt-caching-2024-07-31';
 
 // ============================================================================
 // MAIN ENTRY POINT
@@ -69,14 +74,31 @@ function callClaudeForLabels(emailId, subject, from, body) {
   var systemPrompt = getConfigValue('claude_system_prompt') || buildDefaultSystemPrompt();
   var labelsText = getLabelsForNotification();
 
-  var userMessage = buildEmailPrompt(labelsText, emailId, subject, from, body);
+  var userMessage = buildEmailPrompt(emailId, subject, from, body);
 
   logAction(emailId, 'CLAUDE_SENDING', 'Calling Claude API (' + model + ')');
 
+  // The system prompt and labels list are identical on every call.
+  // Marking them with cache_control tells Anthropic to cache them so
+  // subsequent calls are charged ~10% of the normal input token price
+  // for those blocks instead of 100%.  This is the largest cost lever
+  // in the whole system — the system prompt + labels can be 200-800 tokens
+  // that would otherwise be billed fresh on every single email.
   var payload = {
     model: model,
     max_tokens: 256,
-    system: systemPrompt,
+    system: [
+      {
+        type: 'text',
+        text: systemPrompt,
+        cache_control: { type: 'ephemeral' }
+      },
+      {
+        type: 'text',
+        text: '===== AVAILABLE LABELS =====\n' + (labelsText || '(no labels configured)'),
+        cache_control: { type: 'ephemeral' }
+      }
+    ],
     messages: [
       { role: 'user', content: userMessage }
     ]
@@ -87,7 +109,8 @@ function callClaudeForLabels(emailId, subject, from, body) {
     contentType: 'application/json',
     headers: {
       'x-api-key': apiKey,
-      'anthropic-version': CLAUDE_API_VERSION
+      'anthropic-version': CLAUDE_API_VERSION,
+      'anthropic-beta': CLAUDE_BETA_HEADER
     },
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
@@ -142,19 +165,20 @@ function callClaudeForLabels(emailId, subject, from, body) {
 // ============================================================================
 
 /**
- * Builds the user-facing prompt containing labels and email content.
+ * Builds the per-email user message.
  *
- * @param {string} labelsText - Formatted label list from Labels sheet
- * @param {string} emailId    - Gmail message ID
- * @param {string} subject    - Email subject
- * @param {string} from       - Sender address
- * @param {string} body       - Email body (plain text)
- * @returns {string} Full user prompt
+ * The available labels list is no longer included here — it lives in the
+ * cached system prompt block so it isn't billed as fresh input tokens on
+ * every single call.
+ *
+ * @param {string} emailId - Gmail message ID
+ * @param {string} subject - Email subject
+ * @param {string} from    - Sender address
+ * @param {string} body    - Email body (plain text, may be truncated)
+ * @returns {string} User message for this email
  */
-function buildEmailPrompt(labelsText, emailId, subject, from, body) {
-  return '===== AVAILABLE LABELS =====\n' +
-    (labelsText || '(no labels configured)') +
-    '\n\n===== EMAIL TO CATEGORIZE =====\n' +
+function buildEmailPrompt(emailId, subject, from, body) {
+  return '===== EMAIL TO CATEGORIZE =====\n' +
     'Email ID: ' + emailId + '\n' +
     'Subject: ' + subject + '\n' +
     'From: ' + from + '\n\n' +

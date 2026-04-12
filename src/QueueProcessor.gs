@@ -174,7 +174,27 @@ function processQueueWithClaudeApi(sheet) {
         continue;
       }
     } else {
-      logAction(emailId, 'SKIP', 'Claude returned NONE — no labels applied');
+      // Claude returned NONE — no configured label matched this email.
+      //
+      // IMPORTANT: we must still apply a label so Gmail's has:nouserlabels
+      // query stops picking this email up on every 15-minute timer run.
+      // Without this, every unmatched email loops forever and burns credits.
+      //
+      // The catch-all label name is read from Config key 'catchall_label'
+      // (default: "Smart-CT/Reviewed").  The label is created in Gmail
+      // automatically if it doesn't exist yet.
+      var catchallName = getConfigValue('catchall_label') || 'Smart-CT/Reviewed';
+      try {
+        var catchallGmailLabel = getOrCreateLabel(catchallName);
+        var catchallThread = GmailApp.getMessageById(emailId).getThread();
+        catchallThread.addLabel(catchallGmailLabel);
+        logAction(emailId, 'CATCHALL',
+          'No label matched — applied catch-all "' + catchallName + '" to prevent re-queue');
+      } catch (catchallErr) {
+        logAction(emailId, 'CATCHALL_ERROR',
+          'Could not apply catch-all label "' + catchallName + '": ' + catchallErr.message +
+          '. This email will be re-queued on the next run.');
+      }
     }
 
     // Mark for deletion (collected and applied in reverse order to preserve indices)
@@ -206,8 +226,11 @@ function processQueueWithClaudeApi(sheet) {
 function scanInboxForNewEmails(sheet) {
   var batchSize = parseInt(getConfigValue('batch_size') || '50');
 
+  // Restrict to inbox only. Without "in:inbox", the search hits Sent mail,
+  // All Mail, Promotions, and every other folder — potentially thousands of
+  // historical emails the user never wanted processed.
   try {
-    var threads = GmailApp.search('has:nouserlabels', 0, batchSize);
+    var threads = GmailApp.search('has:nouserlabels in:inbox', 0, batchSize);
   } catch (error) {
     logAction('SYSTEM', 'INBOX_ERROR', 'Gmail search failed: ' + error.message);
     return 0;
