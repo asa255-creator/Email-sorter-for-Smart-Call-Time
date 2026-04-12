@@ -52,7 +52,9 @@ function onOpen() {
       .addSeparator()
       .addItem('Set Webhook URL', 'setWebhookUrlFromMenu')
       .addItem('Register with Hub (via Chat)', 'registerWithHubFromMenu')
-      .addItem('Refresh All', 'refreshAll'))
+      .addSeparator()
+      .addItem('Refresh All', 'refreshAll')
+      .addItem('Refresh Tables (patch missing fields)', 'refreshTables'))
     .addSeparator()
     .addSubMenu(ui.createMenu('Testing')
       .addItem('Test Webhook Ping (Hub -> User)', 'testWebhookPingFromUser')
@@ -514,6 +516,116 @@ function refreshAll() {
   ui.alert('Refresh Complete',
     'All data has been refreshed.',
     ui.ButtonSet.OK);
+}
+
+/**
+ * Non-destructively patches any missing Config keys and verifies all sheet
+ * headers exist.  Safe to run at any time — existing data is never modified
+ * or deleted.
+ *
+ * What it does:
+ *  1. Reads the Config sheet and identifies which canonical keys are absent.
+ *  2. Appends the missing rows (key, default value, description) at the bottom.
+ *  3. Verifies that Log, Queue, and Labels sheets exist; recreates Log if missing.
+ *  4. Alerts the user with a summary of what was added / already present.
+ */
+function refreshTables() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActive();
+
+  var added = [];
+
+  // ── 1. Config sheet ──────────────────────────────────────────────────────────
+  var configSheet = ss.getSheetByName('Config');
+  if (!configSheet) {
+    ui.alert('Config Sheet Missing',
+      'The Config sheet was not found.\n\n' +
+      'Run Smart Call Time > Email Sorter > Setup / Refresh to create it.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  // Canonical list: every key the system expects, with safe defaults.
+  // Order matches createConfigSheet() in SheetSetup.gs, with none_label appended.
+  var canonicalConfig = [
+    ['label_mode',          'scan_only',          'Label setup mode: "scan_only" = sync existing Gmail labels, "add_and_scan" = also create new labels during setup.'],
+    ['connection_mode',     'chat_hub',            'AI routing: "chat_hub" = via Google Chat + Hub + Flows, "direct_claude_api" = direct Anthropic API (bypasses Hub).'],
+    ['claude_api_key',      '',                    'Anthropic API key (sk-ant-...). Required for Direct Claude API mode. Set via Settings > Claude API > Set API Key.'],
+    ['claude_model',        'claude-sonnet-4-6',   'Claude model for Direct API mode. Change via Settings > Claude API > Select Model. Options: claude-opus-4-6 (most capable), claude-sonnet-4-6 (recommended), claude-haiku-4-5 (fastest/cheapest).'],
+    ['claude_system_prompt','',                    'System prompt / instruction packet sent to Claude. Leave blank to use the built-in default.'],
+    ['chat_webhook_url',    '',                    'Webhook URL for Google Chat space. Used in Chat Hub mode to post messages.'],
+    ['webhook_url',         '',                    'This instance\'s deployed web app URL. Hub sends webhooks here. Auto-detected on setup, or set via Settings > Set Webhook URL.'],
+    ['instance_name',       '',                    'Your instance name. Appears in Chat messages so Hub can route to you.'],
+    ['hub_registered',      'false',               'Whether this instance is registered with the Hub.'],
+    ['rate_limit_ms',       '3000',                'Milliseconds to wait between processing emails in batch mode.'],
+    ['batch_size',          '50',                  'Maximum number of emails to queue at once.'],
+    ['last_label_sync',     '',                    'Timestamp of last Gmail label sync.'],
+    ['setup_complete',      'true',                'Whether initial setup has been completed.'],
+    ['version',             '1.2.0',               'Version of Smart Call Time installed.'],
+    ['none_label',          'Needs Review',        'Gmail label applied to emails Claude cannot categorize (NONE response). Prevents them from looping back into the re-scan queue. Change to any valid Gmail label name.']
+  ];
+
+  // Build a lookup of keys already present in the Config sheet
+  var lastRow = configSheet.getLastRow();
+  var existingKeys = {};
+  if (lastRow > 1) {
+    var existingData = configSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    existingData.forEach(function(row) {
+      if (row[0]) {
+        existingKeys[row[0].toString().toLowerCase()] = true;
+      }
+    });
+  }
+
+  // Append only the missing rows — never touch existing rows
+  canonicalConfig.forEach(function(row) {
+    var key = row[0];
+    if (!existingKeys[key.toLowerCase()]) {
+      configSheet.appendRow(row);
+      added.push(key);
+    }
+  });
+
+  // ── 2. Log sheet ─────────────────────────────────────────────────────────────
+  var logSheet = ss.getSheetByName('Log');
+  if (!logSheet) {
+    logSheet = ss.insertSheet('Log');
+    logSheet.getRange(1, 1, 1, 6).setValues([['Timestamp', 'Email ID', 'Action', 'Details', 'Result', 'Notes']]);
+    logSheet.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#ea4335').setFontColor('white');
+    logSheet.setFrozenRows(1);
+    added.push('(Log sheet recreated)');
+  }
+
+  // ── 3. Warn about missing Queue / Labels sheets (can't recreate safely) ──────
+  var missingSheets = [];
+  if (!ss.getSheetByName('Queue'))  missingSheets.push('Queue');
+  if (!ss.getSheetByName('Labels')) missingSheets.push('Labels');
+
+  // ── 4. Log and report ────────────────────────────────────────────────────────
+  logAction('SYSTEM', 'REFRESH_TABLES',
+    'Added ' + added.length + ' missing item(s): ' + (added.join(', ') || 'none'));
+
+  var message;
+  if (added.length === 0 && missingSheets.length === 0) {
+    message = 'Everything is already up to date.\n\nNo changes were made.';
+  } else {
+    message = '';
+    if (added.length > 0) {
+      message += 'Added missing items:\n' +
+        added.map(function(k) { return '  + ' + k; }).join('\n');
+    }
+    if (missingSheets.length > 0) {
+      if (message) message += '\n\n';
+      message += 'Warning — the following sheets are missing:\n' +
+        missingSheets.map(function(s) { return '  ! ' + s; }).join('\n') + '\n\n' +
+        'Run Setup / Refresh to recreate them.';
+    }
+    if (added.length > 0) {
+      message += '\n\nExisting data was not modified.';
+    }
+  }
+
+  ui.alert('Refresh Tables', message, ui.ButtonSet.OK);
 }
 
 /**
