@@ -42,10 +42,22 @@ function logAction(emailId, action, details, result = '', notes = '') {
 
   const timestamp = new Date().toISOString();
   const lastRow = sheet.getLastRow();
+  const writeRow = lastRow + 1;
 
-  sheet.getRange(lastRow + 1, 1, 1, 6).setValues([
-    [timestamp, emailId, action, details, result, notes]
-  ]);
+  // Log sheet can shrink if rows were deleted (pruneOldLogs uses deleteRows).
+  // Expand before writing to avoid "coordinates outside dimensions" crashes.
+  if (writeRow > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), 200);
+  }
+
+  try {
+    sheet.getRange(writeRow, 1, 1, 6).setValues([
+      [timestamp, emailId, action, details, result, notes]
+    ]);
+  } catch (writeErr) {
+    console.error('[Logger] Failed to write log entry: ' + writeErr.message +
+      ' | ' + action + ' | ' + emailId + ' | ' + details);
+  }
 }
 
 /**

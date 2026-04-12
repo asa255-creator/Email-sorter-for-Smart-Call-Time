@@ -50,9 +50,12 @@ function checkInboxAndPostNext() {
     if (!sheet) return;
 
     var added = scanInboxForNewEmails(sheet);
-    if (added > 0) {
-      logAction('SYSTEM', 'INBOX_SCAN', 'Added ' + added + ' new email(s) to queue (Direct Claude API mode)');
-    }
+    var queueCount = Math.max(0, sheet.getLastRow() - 1);
+
+    // Always log every timer run so the user can confirm the trigger is alive,
+    // even when the inbox is clean and the queue is empty.
+    logAction('SYSTEM', 'TIMER_RUN',
+      'Inbox: ' + added + ' new email(s) added. Queue: ' + queueCount + ' row(s) pending.');
 
     processQueueWithClaudeApi(sheet);
     return;
