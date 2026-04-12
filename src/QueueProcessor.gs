@@ -176,15 +176,24 @@ function processQueueWithClaudeApi(sheet) {
     } else {
       // Claude returned NONE — no configured label matched this email.
       //
-      // Mark as "Skipped" and leave the row in the queue.  This prevents
-      // the email from being re-added on the next scan because
-      // getExistingQueueIds() includes ALL rows regardless of status.
-      // The email is untouched in Gmail; the user can review Skipped rows
-      // and decide whether to add a label that covers them.
+      // Apply the label named in Config key 'none_label' (default: "Needs Review").
+      // This label is intentionally kept OUT of the Labels sheet so Claude never
+      // sees it as a choice — it is applied by the code only as a last resort.
+      //
+      // The label is auto-created in Gmail if it doesn't exist yet.
+      // Marking the row Skipped keeps it in the queue so getExistingQueueIds()
+      // prevents this email from being re-added on the next scan.
+      var noneLabel = getConfigValue('none_label') || 'Needs Review';
+      try {
+        var gmailLabel = getOrCreateLabel(noneLabel);
+        GmailApp.getMessageById(emailId).getThread().addLabel(gmailLabel);
+        logAction(emailId, 'NONE_LABEL',
+          'No label matched — applied "' + noneLabel + '" from Config none_label');
+      } catch (noneErr) {
+        logAction(emailId, 'NONE_ERROR',
+          'Could not apply none_label "' + noneLabel + '": ' + noneErr.message);
+      }
       sheet.getRange(i + 2, 6).setValue('Skipped');
-      logAction(emailId, 'SKIPPED',
-        'Claude returned NONE — no configured label matched. Row kept in queue as Skipped.');
-      // Do NOT add to rowsToDelete — row stays so it is never re-queued.
       continue;
     }
 
