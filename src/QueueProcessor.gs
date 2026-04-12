@@ -176,25 +176,16 @@ function processQueueWithClaudeApi(sheet) {
     } else {
       // Claude returned NONE — no configured label matched this email.
       //
-      // IMPORTANT: we must still apply a label so Gmail's has:nouserlabels
-      // query stops picking this email up on every 15-minute timer run.
-      // Without this, every unmatched email loops forever and burns credits.
-      //
-      // The catch-all label name is read from Config key 'catchall_label'
-      // (default: "Smart-CT/Reviewed").  The label is created in Gmail
-      // automatically if it doesn't exist yet.
-      var catchallName = getConfigValue('catchall_label') || 'Smart-CT/Reviewed';
-      try {
-        var catchallGmailLabel = getOrCreateLabel(catchallName);
-        var catchallThread = GmailApp.getMessageById(emailId).getThread();
-        catchallThread.addLabel(catchallGmailLabel);
-        logAction(emailId, 'CATCHALL',
-          'No label matched — applied catch-all "' + catchallName + '" to prevent re-queue');
-      } catch (catchallErr) {
-        logAction(emailId, 'CATCHALL_ERROR',
-          'Could not apply catch-all label "' + catchallName + '": ' + catchallErr.message +
-          '. This email will be re-queued on the next run.');
-      }
+      // Mark as "Skipped" and leave the row in the queue.  This prevents
+      // the email from being re-added on the next scan because
+      // getExistingQueueIds() includes ALL rows regardless of status.
+      // The email is untouched in Gmail; the user can review Skipped rows
+      // and decide whether to add a label that covers them.
+      sheet.getRange(i + 2, 6).setValue('Skipped');
+      logAction(emailId, 'SKIPPED',
+        'Claude returned NONE — no configured label matched. Row kept in queue as Skipped.');
+      // Do NOT add to rowsToDelete — row stays so it is never re-queued.
+      continue;
     }
 
     // Mark for deletion (collected and applied in reverse order to preserve indices)
