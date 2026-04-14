@@ -552,7 +552,29 @@ function scanInboxNow() {
   var added = scanInboxForNewEmails(sheet);
 
   if (added === 0) {
-    ui.alert('No New Emails', 'No new unlabeled emails found.', ui.ButtonSet.OK);
+    // Count inbox emails labeled with the none_label so the user understands
+    // why the scan returned nothing even though emails are visible in Gmail.
+    var noneLabel = getConfigValue('none_label') || 'Needs Review';
+    var noneCount = 0;
+    try {
+      // Gmail label query: lowercase, spaces → hyphens
+      var labelQuery = noneLabel.toLowerCase().replace(/\s+/g, '-');
+      noneCount = GmailApp.search('in:inbox label:' + labelQuery, 0, 50).length;
+    } catch (e) { /* ignore — query may fail if label doesn't exist */ }
+
+    var msg = 'No new unlabeled emails found.\n\n' +
+      'All inbox emails already have a label applied from a previous run.';
+
+    if (noneCount > 0) {
+      msg += '\n\n' + noneCount + '+ inbox email(s) have the "' + noneLabel + '" label ' +
+        '(Claude could not match them to any category).\n\n' +
+        'To re-process those emails:\n' +
+        '  1. Improve label descriptions in the Labels sheet (column E)\n' +
+        '  2. Remove the "' + noneLabel + '" label from those emails in Gmail\n' +
+        '  3. Run Scan Inbox Now again';
+    }
+
+    ui.alert('No New Emails', msg, ui.ButtonSet.OK);
     return;
   }
 

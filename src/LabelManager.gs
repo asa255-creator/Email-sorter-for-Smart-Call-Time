@@ -118,6 +118,16 @@ function syncLabelsToSheet() {
   const labels = getGmailLabels();
   const now = new Date().toISOString();
 
+  // Remove the none_label from the list before syncing to the sheet.
+  // "Needs Review" (or whatever none_label is set to) is a code-applied fallback —
+  // it must never appear as a choice Claude can pick, otherwise it becomes a
+  // self-fulfilling category and every email that was once unclassifiable
+  // stays classified as "Needs Review" forever.
+  var noneLabelName = (getConfigValue('none_label') || 'Needs Review').toLowerCase();
+  const filteredLabels = labels.filter(function(l) {
+    return l.name.toLowerCase() !== noneLabelName;
+  });
+
   // Get existing descriptions to preserve them
   const existingDescriptions = {};
   const lastRow = sheet.getLastRow();
@@ -136,7 +146,7 @@ function syncLabelsToSheet() {
   }
 
   // Prepare data rows, preserving descriptions
-  const data = labels.map(label => [
+  const data = filteredLabels.map(label => [
     label.name,
     label.id,
     label.nestedPath,
@@ -156,7 +166,10 @@ function syncLabelsToSheet() {
   // Update config
   setConfigValue('last_label_sync', now);
 
-  logAction('SYSTEM', 'SYNC', `Synced ${labels.length} labels`);
+  var skippedCount = labels.length - filteredLabels.length;
+  logAction('SYSTEM', 'SYNC',
+    'Synced ' + filteredLabels.length + ' label(s)' +
+    (skippedCount > 0 ? ' (excluded ' + skippedCount + ' none_label: "' + noneLabelName + '")' : ''));
 
   return labels;
 }
