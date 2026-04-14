@@ -537,6 +537,26 @@ function refreshTables() {
 
   var added = [];
 
+  // ── 0. Trim bloated sheets ───────────────────────────────────────────────────
+  // Previous versions called insertRowsAfter() with a large buffer on every scan,
+  // causing Queue and Log sheets to balloon to hundreds of thousands of rows and
+  // eventually hit Google Sheets' 10 million cell limit. Trim each sheet to
+  // max(lastDataRow + 200, 1000) before anything else so further operations don't
+  // fail with "would increase cells above the limit of 10000000".
+  ['Queue', 'Log', 'Labels'].forEach(function(name) {
+    var s = ss.getSheetByName(name);
+    if (!s) return;
+    var lastData = s.getLastRow();
+    var maxRows  = s.getMaxRows();
+    var target   = Math.max(lastData + 200, 1000);
+    if (maxRows > target) {
+      try {
+        s.deleteRows(target + 1, maxRows - target);
+        added.push('(trimmed ' + name + ': ' + maxRows + ' → ' + target + ' rows)');
+      } catch (e) { /* ignore if deleteRows fails */ }
+    }
+  });
+
   // ── 1. Config sheet ──────────────────────────────────────────────────────────
   var configSheet = ss.getSheetByName('Config');
   if (!configSheet) {

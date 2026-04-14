@@ -47,7 +47,9 @@ function logAction(emailId, action, details, result = '', notes = '') {
   // Log sheet can shrink if rows were deleted (pruneOldLogs uses deleteRows).
   // Expand before writing to avoid "coordinates outside dimensions" crashes.
   if (writeRow > sheet.getMaxRows()) {
-    sheet.insertRowsAfter(sheet.getMaxRows(), 200);
+    // Insert a small batch — inserting 200 at a time was causing the Log sheet
+    // to balloon and contributed to the 10M cell limit error.
+    sheet.insertRowsAfter(sheet.getMaxRows(), 50);
   }
 
   try {

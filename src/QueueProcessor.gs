@@ -307,7 +307,9 @@ function scanInboxForNewEmails(sheet) {
   // getRange() never exceeds the sheet's physical row count.
   var rowsNeeded = startRow + newRows.length - 1;
   if (rowsNeeded > sheet.getMaxRows()) {
-    sheet.insertRowsAfter(sheet.getMaxRows(), rowsNeeded - sheet.getMaxRows() + 100);
+    // Insert only exactly what's needed — no extra buffer.
+    // Over-inserting rows was the cause of the 10M-cell limit error.
+    sheet.insertRowsAfter(sheet.getMaxRows(), rowsNeeded - sheet.getMaxRows());
   }
 
   sheet.getRange(startRow, 1, newRows.length, 8).setValues(newRows);
