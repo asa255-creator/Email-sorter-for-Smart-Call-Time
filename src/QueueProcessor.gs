@@ -237,7 +237,7 @@ function scanInboxForNewEmails(sheet) {
   // is consistent regardless of inbox size.
   var fetchSize = Math.min(batchSize * 4, 200);
   try {
-    var allThreads = GmailApp.search('in:inbox', 0, fetchSize);
+    var allThreads = GmailApp.search('in:inbox newer_than:7d', 0, fetchSize);
   } catch (error) {
     logAction('SYSTEM', 'INBOX_ERROR', 'Gmail search failed: ' + error.message);
     return 0;
