@@ -241,121 +241,86 @@ function handleTestSheetsChatComplete(data) {
 // ============================================================================
 
 /**
- * Runs the inbox scan logic step-by-step and writes a detailed report to
- * the Log sheet so we can see exactly what threads are found, what labels
- * each carries, and why each is included or skipped.
- *
- * Menu: Smart Call Time > Testing > Diagnose Inbox Scan
+ * Diagnoses why the inbox scan finds no emails.
+ * Run directly from the Apps Script editor (no menu needed).
+ * All output goes to the execution log — nothing touches the spreadsheet.
  */
 function diagnoseScan() {
-  var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActive();
 
-  // ── 1. Report config ──────────────────────────────────────────────────────
-  var batchSize   = parseInt(getConfigValue('batch_size') || '50');
-  var fetchSize   = Math.min(batchSize * 4, 200);
-  var noneLabel   = (getConfigValue('none_label') || 'Needs Review').toLowerCase();
-  var connMode    = getConfigValue('connection_mode') || 'chat_hub';
+  // ── 1. Config ─────────────────────────────────────────────────────────────
+  var batchSize = parseInt(getConfigValue('batch_size') || '50');
+  var fetchSize = Math.min(batchSize * 4, 200);
+  var noneLabel = (getConfigValue('none_label') || 'Needs Review').toLowerCase();
+  var connMode  = getConfigValue('connection_mode') || 'chat_hub';
 
-  logAction('DIAG', 'CONFIG',
-    'connection_mode=' + connMode +
-    ' | batch_size=' + batchSize +
-    ' | fetch_size=' + fetchSize +
-    ' | none_label=' + noneLabel);
+  console.log('=== DIAGNOSE SCAN ===');
+  console.log('connection_mode: ' + connMode);
+  console.log('batch_size: ' + batchSize + '  fetch_size: ' + fetchSize);
+  console.log('none_label: "' + noneLabel + '"');
 
-  // ── 2. Report configured labels (from Labels sheet) ───────────────────────
+  // ── 2. Labels sheet ───────────────────────────────────────────────────────
   var processedLabelNames = new Set();
   var labelsSheet = ss.getSheetByName('Labels');
   if (labelsSheet && labelsSheet.getLastRow() > 1) {
-    var labelRows = labelsSheet.getRange(2, 1, labelsSheet.getLastRow() - 1, 1).getValues();
-    labelRows.forEach(function(row) {
-      if (row[0]) processedLabelNames.add(row[0].toString().toLowerCase());
-    });
+    labelsSheet.getRange(2, 1, labelsSheet.getLastRow() - 1, 1).getValues()
+      .forEach(function(row) { if (row[0]) processedLabelNames.add(row[0].toString().toLowerCase()); });
   }
-  logAction('DIAG', 'CONFIGURED_LABELS',
-    processedLabelNames.size + ' label(s): ' +
+  console.log('Configured labels (' + processedLabelNames.size + '): ' +
     Array.from(processedLabelNames).join(', '));
 
-  // ── 3. Report Queue state ─────────────────────────────────────────────────
+  // ── 3. Queue ──────────────────────────────────────────────────────────────
   var queueSheet = ss.getSheetByName('Queue');
   var existingIds = queueSheet ? getExistingQueueIds(queueSheet) : new Set();
-  logAction('DIAG', 'QUEUE_IDS', existingIds.size + ' email ID(s) already in Queue');
+  console.log('Email IDs already in Queue: ' + existingIds.size);
 
-  // ── 4. Run Gmail search ───────────────────────────────────────────────────
+  // ── 4. Gmail search ───────────────────────────────────────────────────────
   var allThreads = [];
   try {
     allThreads = GmailApp.search('in:inbox newer_than:7d', 0, fetchSize);
   } catch (e) {
-    logAction('DIAG', 'SEARCH_ERROR', e.message);
-    ui.alert('Diagnose Scan', 'Gmail search failed — check Log sheet.', ui.ButtonSet.OK);
+    console.log('SEARCH ERROR: ' + e.message);
     return;
   }
-  logAction('DIAG', 'SEARCH_RESULT',
-    'Gmail returned ' + allThreads.length + ' thread(s) for "in:inbox newer_than:7d"');
+  console.log('Gmail returned ' + allThreads.length + ' thread(s) for "in:inbox newer_than:7d"');
 
   if (allThreads.length === 0) {
-    logAction('DIAG', 'CONCLUSION', 'STOP: Gmail search returned 0 threads. ' +
-      'No emails in inbox newer than 7 days, or Gmail search quota hit.');
-    ui.alert('Diagnose Scan',
-      'Gmail search returned 0 threads.\n\n' +
-      'Either there are genuinely no inbox emails newer than 7 days, ' +
-      'or Gmail is rate-limiting the search.\n\nCheck the Log sheet.',
-      ui.ButtonSet.OK);
+    console.log('STOP: 0 threads returned. No inbox emails newer than 7 days, or quota hit.');
     return;
   }
 
-  // ── 5. Inspect each thread ────────────────────────────────────────────────
-  var wouldQueue = 0;
-  var skippedLabel = 0;
-  var skippedQueue = 0;
+  // ── 5. Thread-by-thread inspection ───────────────────────────────────────
+  var wouldQueue = 0, skippedLabel = 0, skippedQueue = 0;
 
   for (var i = 0; i < allThreads.length && i < 30; i++) {
-    var thread    = allThreads[i];
-    var message   = thread.getMessages()[0];
-    var emailId   = message.getId();
-    var subject   = (message.getSubject() || '(no subject)').substring(0, 60);
-    var rawLabels = thread.getLabels();
-    var labelNames = rawLabels.map(function(l) { return l.getName(); });
+    var thread     = allThreads[i];
+    var message    = thread.getMessages()[0];
+    var emailId    = message.getId();
+    var subject    = (message.getSubject() || '(no subject)').substring(0, 60);
+    var labelNames = thread.getLabels().map(function(l) { return l.getName(); });
 
     var matchedLabel = null;
     for (var k = 0; k < labelNames.length; k++) {
       var ln = labelNames[k].toLowerCase();
-      if (processedLabelNames.has(ln) || ln === noneLabel) {
-        matchedLabel = labelNames[k];
-        break;
-      }
+      if (processedLabelNames.has(ln) || ln === noneLabel) { matchedLabel = labelNames[k]; break; }
     }
-
-    var inQueue = existingIds.has(emailId);
 
     var verdict;
-    if (inQueue) {
-      verdict = 'SKIP(already_in_queue)';
-      skippedQueue++;
-    } else if (matchedLabel) {
-      verdict = 'SKIP(label="' + matchedLabel + '")';
-      skippedLabel++;
-    } else {
-      verdict = 'WOULD_QUEUE';
-      wouldQueue++;
-    }
+    if (existingIds.has(emailId))  { verdict = 'SKIP - already in queue'; skippedQueue++; }
+    else if (matchedLabel)          { verdict = 'SKIP - label "' + matchedLabel + '"'; skippedLabel++; }
+    else                            { verdict = 'WOULD QUEUE'; wouldQueue++; }
 
-    logAction('DIAG', verdict,
-      'Thread ' + (i + 1) + ': "' + subject + '" | ' +
-      'getLabels()=[' + labelNames.join(', ') + '] | id=' + emailId);
+    console.log('[' + (i + 1) + '] ' + verdict +
+      ' | subject: "' + subject + '"' +
+      ' | getLabels(): [' + labelNames.join(', ') + ']');
   }
 
   // ── 6. Summary ────────────────────────────────────────────────────────────
-  var summary =
-    'Threads found by Gmail: ' + allThreads.length + '\n' +
-    'Inspected (first 30): ' + Math.min(allThreads.length, 30) + '\n' +
-    '  Would queue:          ' + wouldQueue + '\n' +
-    '  Skipped (label match):' + skippedLabel + '\n' +
-    '  Skipped (in queue):   ' + skippedQueue;
-
-  logAction('DIAG', 'SUMMARY', summary.replace(/\n/g, ' | '));
-
-  ui.alert('Diagnose Scan — Results', summary + '\n\nFull details written to the Log sheet.', ui.ButtonSet.OK);
+  console.log('--- SUMMARY ---');
+  console.log('Total threads from Gmail: ' + allThreads.length);
+  console.log('Would queue:   ' + wouldQueue);
+  console.log('Skipped (label): ' + skippedLabel);
+  console.log('Skipped (queue): ' + skippedQueue);
 }
 
 // ============================================================================
