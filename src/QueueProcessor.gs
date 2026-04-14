@@ -245,6 +245,22 @@ function scanInboxForNewEmails(sheet) {
 
   if (allThreads.length === 0) return 0;
 
+  // Build set of label names that mean "this thread is already processed."
+  // We compare against this instead of checking getLabels().length > 0 because
+  // getLabels() can return system labels (IMPORTANT, STARRED) in some Gmail
+  // accounts despite the documentation saying it only returns user-created labels.
+  // By explicitly ignoring known system label names we avoid skipping every
+  // inbox thread just because Gmail marked them as IMPORTANT.
+  var noneLabel = (getConfigValue('none_label') || 'Needs Review').toLowerCase();
+  var processedLabelNames = new Set();
+  try {
+    var labelsSheet = SpreadsheetApp.getActive().getSheetByName('Labels');
+    if (labelsSheet && labelsSheet.getLastRow() > 1) {
+      labelsSheet.getRange(2, 1, labelsSheet.getLastRow() - 1, 1).getValues()
+        .forEach(function(row) { if (row[0]) processedLabelNames.add(row[0].toString().toLowerCase()); });
+    }
+  } catch (e) { /* non-fatal — fall back to none_label check only */ }
+
   var existingIds = getExistingQueueIds(sheet);
   var newRows = [];
 
@@ -253,10 +269,15 @@ function scanInboxForNewEmails(sheet) {
 
     var thread = allThreads[i];
 
-    // Skip threads that already have user labels — they're categorized.
-    // thread.getLabels() returns only user-created labels, not system/category
-    // labels like INBOX or CATEGORY_PROMOTIONS, so this is safe and accurate.
-    if (thread.getLabels().length > 0) continue;
+    // A thread counts as "already labeled" only if it carries one of the
+    // configured category labels OR the none_label ("Needs Review").
+    // System labels (INBOX, IMPORTANT, STARRED, CATEGORY_*) are ignored even
+    // if getLabels() returns them — every inbox email would otherwise be skipped.
+    var threadLabelNames = thread.getLabels().map(function(l) { return l.getName().toLowerCase(); });
+    var alreadyLabeled = threadLabelNames.some(function(name) {
+      return processedLabelNames.has(name) || name === noneLabel;
+    });
+    if (alreadyLabeled) continue;
 
     var message = thread.getMessages()[0];
     var emailId = message.getId();
@@ -565,29 +586,12 @@ function scanInboxNow() {
   var added = scanInboxForNewEmails(sheet);
 
   if (added === 0) {
-    // Count inbox emails labeled with the none_label so the user understands
-    // why the scan returned nothing even though emails are visible in Gmail.
-    var noneLabel = getConfigValue('none_label') || 'Needs Review';
-    var noneCount = 0;
-    try {
-      // Gmail label query: lowercase, spaces → hyphens
-      var labelQuery = noneLabel.toLowerCase().replace(/\s+/g, '-');
-      noneCount = GmailApp.search('in:inbox label:' + labelQuery, 0, 50).length;
-    } catch (e) { /* ignore — query may fail if label doesn't exist */ }
-
-    var msg = 'No new unlabeled emails found.\n\n' +
-      'All inbox emails already have a label applied from a previous run.';
-
-    if (noneCount > 0) {
-      msg += '\n\n' + noneCount + '+ inbox email(s) have the "' + noneLabel + '" label ' +
-        '(Claude could not match them to any category).\n\n' +
-        'To re-process those emails:\n' +
-        '  1. Improve label descriptions in the Labels sheet (column E)\n' +
-        '  2. Remove the "' + noneLabel + '" label from those emails in Gmail\n' +
-        '  3. Run Scan Inbox Now again';
-    }
-
-    ui.alert('No New Emails', msg, ui.ButtonSet.OK);
+    ui.alert('No New Emails',
+      'No new unlabeled emails found in the past 7 days.\n\n' +
+      'Emails that already have one of your configured labels (or "' +
+      (getConfigValue('none_label') || 'Needs Review') +
+      '") are skipped.',
+      ui.ButtonSet.OK);
     return;
   }
 
