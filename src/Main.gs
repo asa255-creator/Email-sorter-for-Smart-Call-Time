@@ -57,6 +57,8 @@ function onOpen() {
       .addItem('Refresh Tables (patch missing fields)', 'refreshTables'))
     .addSeparator()
     .addSubMenu(ui.createMenu('Testing')
+      .addItem('Diagnose Inbox Scan', 'diagnoseScan')
+      .addSeparator()
       .addItem('Test Webhook Ping (Hub -> User)', 'testWebhookPingFromUser')
       .addItem('Test Chat Connection (User -> Chat -> Hub -> User)', 'testChatConnectionFromUser')
       .addItem('Test Sheets Chat Round-Trip (Full test with cleanup)', 'testSheetsChatFromUser'))
