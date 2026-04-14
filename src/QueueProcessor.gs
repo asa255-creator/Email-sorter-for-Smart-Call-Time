@@ -229,23 +229,36 @@ function processQueueWithClaudeApi(sheet) {
 function scanInboxForNewEmails(sheet) {
   var batchSize = parseInt(getConfigValue('batch_size') || '50');
 
-  // Restrict to inbox only. Without "in:inbox", the search hits Sent mail,
-  // All Mail, Promotions, and every other folder — potentially thousands of
-  // historical emails the user never wanted processed.
+  // Fetch a wider slice of inbox than batchSize and filter in code.
+  // 'has:nouserlabels' is unreliable in GmailApp.search() — it can return 0
+  // results even when unlabeled emails exist (known Apps Script limitation on
+  // large inboxes). Instead we fetch all inbox threads and call
+  // thread.getLabels() ourselves: that returns only user-created labels and
+  // is consistent regardless of inbox size.
+  var fetchSize = Math.min(batchSize * 4, 200);
   try {
-    var threads = GmailApp.search('has:nouserlabels in:inbox', 0, batchSize);
+    var allThreads = GmailApp.search('in:inbox', 0, fetchSize);
   } catch (error) {
     logAction('SYSTEM', 'INBOX_ERROR', 'Gmail search failed: ' + error.message);
     return 0;
   }
 
-  if (threads.length === 0) return 0;
+  if (allThreads.length === 0) return 0;
 
   var existingIds = getExistingQueueIds(sheet);
   var newRows = [];
 
-  for (var i = 0; i < threads.length; i++) {
-    var message = threads[i].getMessages()[0];
+  for (var i = 0; i < allThreads.length; i++) {
+    if (newRows.length >= batchSize) break;
+
+    var thread = allThreads[i];
+
+    // Skip threads that already have user labels — they're categorized.
+    // thread.getLabels() returns only user-created labels, not system/category
+    // labels like INBOX or CATEGORY_PROMOTIONS, so this is safe and accurate.
+    if (thread.getLabels().length > 0) continue;
+
+    var message = thread.getMessages()[0];
     var emailId = message.getId();
 
     if (existingIds.has(emailId)) continue;
