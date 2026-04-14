@@ -41,14 +41,14 @@ function logAction(emailId, action, details, result = '', notes = '') {
   }
 
   const timestamp = new Date().toISOString();
-  const lastRow = sheet.getLastRow();
-  const writeRow = lastRow + 1;
 
-  // Log sheet can shrink if rows were deleted (pruneOldLogs uses deleteRows).
-  // Expand before writing to avoid "coordinates outside dimensions" crashes.
+  // Use getLastRow() + 1 to append after existing entries. getLastRow() only
+  // counts rows that have actual content, so blank rows (from old insertRowsAfter
+  // calls) below the last entry are correctly skipped.
+  const writeRow = sheet.getLastRow() + 1;
+
   if (writeRow > sheet.getMaxRows()) {
-    // Insert a small batch — inserting 200 at a time was causing the Log sheet
-    // to balloon and contributed to the 10M cell limit error.
+    // Insert only what's needed — no large buffers that bloat the sheet.
     sheet.insertRowsAfter(sheet.getMaxRows(), 50);
   }
 

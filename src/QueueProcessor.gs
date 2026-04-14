@@ -634,10 +634,12 @@ function clearQueue() {
   if (response === ui.Button.YES) {
     var lastRow = sheet.getLastRow();
     if (lastRow > 1) {
-      // Clear content instead of deleting rows. deleteRows() physically shrinks
-      // the sheet each time, which eventually causes getRange() to throw
-      // "coordinates outside dimensions" when new emails are added.
-      sheet.getRange(2, 1, lastRow - 1, 8).clear();
+      // Delete rows entirely so getLastRow() resets to 1 (header only).
+      // clear() only wipes content but leaves rows in place, so getLastRow()
+      // still returns the old high-water mark and new emails get appended
+      // way down the sheet instead of starting at row 2.
+      // scanInboxForNewEmails handles getMaxRows() being small via insertRowsAfter.
+      sheet.deleteRows(2, lastRow - 1);
     }
     ui.alert('Queue Cleared', 'The queue has been cleared.', ui.ButtonSet.OK);
     logAction('SYSTEM', 'CLEAR', 'Queue cleared');
