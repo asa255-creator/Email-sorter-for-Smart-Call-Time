@@ -1,798 +1,235 @@
 /**
- * Smart Call Time - Flow Integrator
- * Main entry points, menu setup, and triggers
- *
- * Communication model:
- * - User -> Hub: Via Google Chat messages (chat_webhook_url in Config sheet)
- * - Hub -> User: Via webhooks to our web app URL (webhook_url in Config sheet)
- * - No direct HTTP to Hub (Hub has no web app)
- *
- * MODULES:
- * - SheetSetup.gs: Sheet creation and initialization
- * - LabelManager.gs: Gmail label operations
- * - QueueProcessor.gs: Email queue processing
- * - ConfigManager.gs: Configuration management
- * - Logger.gs: Logging utilities
+ * Email Sorter — menu, setup and settings.
  */
 
-// ============================================================================
-// MENU SETUP
-// ============================================================================
-
-/**
- * Creates the custom menu when the spreadsheet is opened.
- * This is a simple trigger that runs automatically.
- */
 function onOpen() {
   var ui = SpreadsheetApp.getUi();
-
-  ui.createMenu('Smart Call Time')
-    // Email Sorter submenu
-    .addSubMenu(ui.createMenu('Email Sorter')
-      .addItem('Setup / Refresh', 'emailSorterSetup')
-      .addSeparator()
-      .addItem('Sync Labels Now', 'syncLabelsToSheet')
-      .addItem('Add Custom Label', 'addCustomLabelFromMenu')
-      .addItem('Scan Inbox Now', 'scanInboxNow')
-      .addSeparator()
-      .addItem('Clear Queue', 'clearQueue'))
+  ui.createMenu('Email Sorter')
+    .addItem('Sort now', 'sortNowFromMenu')
+    .addItem('Status', 'showStatus')
+    .addSeparator()
+    .addItem('Suggest labels from my mail…', 'suggestLabels')
+    .addItem('Apply checked suggestions', 'applySuggestions')
+    .addItem('Sync labels from Gmail', 'syncLabelsFromMenu')
     .addSeparator()
     .addSubMenu(ui.createMenu('Settings')
-      .addItem('Show Configuration', 'showConfig')
-      .addSeparator()
-      .addItem('Change Label Setup Mode', 'switchLabelModeFromMenu')
-      .addItem('Switch Connection Mode (Chat Hub / Claude API)', 'switchConnectionModeFromMenu')
-      .addSeparator()
-      .addSubMenu(ui.createMenu('Claude API')
-        .addItem('Show Claude API Settings', 'showClaudeApiSettings')
-        .addItem('Set API Key', 'setClaudeApiKey')
-        .addItem('Select Model', 'setClaudeModel')
-        .addItem('Edit System Prompt', 'setClaudeSystemPrompt')
-        .addItem('Test Claude API Connection', 'testClaudeApiConnection'))
-      .addSeparator()
-      .addItem('Set Webhook URL', 'setWebhookUrlFromMenu')
-      .addItem('Register with Hub (via Chat)', 'registerWithHubFromMenu')
-      .addSeparator()
-      .addItem('Refresh All', 'refreshAll')
-      .addItem('Refresh Tables (patch missing fields)', 'refreshTables'))
+      .addItem('Set Claude API key…', 'setApiKeyFromMenu')
+      .addItem('Choose model…', 'chooseModelFromMenu')
+      .addItem('Test Claude connection', 'testClaudeFromMenu'))
     .addSeparator()
-    .addSubMenu(ui.createMenu('Testing')
-      .addItem('Test Webhook Ping (Hub -> User)', 'testWebhookPingFromUser')
-      .addItem('Test Chat Connection (User -> Chat -> Hub -> User)', 'testChatConnectionFromUser')
-      .addItem('Test Sheets Chat Round-Trip (Full test with cleanup)', 'testSheetsChatFromUser'))
+    .addItem('Pause automatic sorting', 'pauseSorting')
+    .addItem('Resume automatic sorting', 'resumeSorting')
+    .addItem('Set up / upgrade', 'setupSorter')
     .addToUi();
 }
 
+/**
+ * Simple trigger: when you edit a sender's Label, Inbox action or Type on
+ * the Senders sheet, that row becomes your choice.
+ */
+function onEdit(e) {
+  if (!e || !e.range) return;
+  var sheet = e.range.getSheet();
+  if (sheet.getName() !== 'Senders' || e.range.getRow() < 2) return;
+  var first = e.range.getColumn();
+  var last = first + e.range.getNumColumns() - 1;
+  if (last < 2 || first > 4) return;
+  sheet.getRange(e.range.getRow(), 7, e.range.getNumRows(), 1)
+    .setValues(Array(e.range.getNumRows()).fill(['you']));
+}
+
 // ============================================================================
-// INSTALLABLE TRIGGERS
+// SETUP / UPGRADE
 // ============================================================================
 
-/**
- * Sets up all installable triggers for the application.
- * Creates a 15-minute time-based trigger to check the queue.
- */
-function setupTriggers() {
-  // Remove existing triggers for our functions
-  var triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach(function(trigger) {
-    var handlerName = trigger.getHandlerFunction();
-    if (handlerName === 'onEditTrigger' || handlerName === 'checkQueueForProcessing' || handlerName === 'checkInboxAndPostNext') {
-      ScriptApp.deleteTrigger(trigger);
-    }
+function setupSorter() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActive();
+  var go = ui.alert('Set up Email Sorter ' + SORTER_VERSION,
+    'This will:\n' +
+    '• create or upgrade the Config, Labels, Rules, Senders and Log sheets (your label descriptions are kept)\n' +
+    '• store your Claude API key privately instead of in the sheet\n' +
+    '• use Claude Sonnet 5.5\n' +
+    '• remove the old Queue and Instructions sheets\n' +
+    '• add Sorter labels to Gmail\n' +
+    '• sort your inbox every 10 minutes\n\n' +
+    'Nothing is archived until you choose an Inbox action for a label, apart from GitHub noise ' +
+    '(see the Rules sheet) and cold sales email.', ui.ButtonSet.OK_CANCEL);
+  if (go !== ui.Button.OK) return;
+
+  var notes = ensureConfigSheet(ss);
+  var oldDescriptions = ensureLabelsSheet(ss, notes);
+  if (ensureRulesSheet(ss)) notes.push('Added the Rules sheet with GitHub rules.');
+  if (ensureSendersSheet(ss)) notes.push('Added the Senders sheet (sender memory).');
+  ensureLogSheet(ss);
+  ensureStartHereSheet(ss);
+  ensureSorterLabels();
+  syncLabelsToSheet(oldDescriptions);
+  var removed = removeV1Sheets(ss);
+  if (removed.length) notes.push('Removed the old ' + removed.join(' and ') + ' sheet' + (removed.length > 1 ? 's' : '') + '.');
+
+  if (!getApiKey()) setApiKeyFromMenu();
+  installTrigger_();
+  clearClaudeBlock();
+  ss.setActiveSheet(ss.getSheetByName('Labels'));
+
+  ui.alert('Email Sorter is set up',
+    (notes.length ? notes.map(function(n) { return '• ' + n; }).join('\n') + '\n\n' : '') +
+    'Next:\n' +
+    '1. On the Labels sheet, set an Inbox action for each label and describe what belongs in it. ' +
+    'Or run Email Sorter > Suggest labels from my mail.\n' +
+    '2. Add anything Claude should know about you to sorting_notes on the Config sheet.\n' +
+    '3. Run Email Sorter > Sort now, then read the Log sheet.\n\n' +
+    'If you used the old Hub version: in Apps Script, open Deploy > Manage deployments and archive the old ' +
+    'web app. It is no longer used and should not stay online.',
+    ui.ButtonSet.OK);
+}
+
+function installTrigger_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('runSorter').timeBased().everyMinutes(10).create();
+}
+
+function pauseSorting() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'runSorter') ScriptApp.deleteTrigger(t);
   });
+  SpreadsheetApp.getUi().alert('Paused', 'Automatic sorting is off. Use Resume automatic sorting to turn it back on.',
+    SpreadsheetApp.getUi().ButtonSet.OK);
+}
 
-  // Create 15-minute time-based trigger for inbox scanning + posting to Chat
-  ScriptApp.newTrigger('checkInboxAndPostNext')
-    .timeBased()
-    .everyMinutes(15)
-    .create();
+function resumeSorting() {
+  installTrigger_();
+  SpreadsheetApp.getUi().alert('Resumed', 'Your inbox is sorted every 10 minutes.', SpreadsheetApp.getUi().ButtonSet.OK);
+}
 
-  logAction('SYSTEM', 'SETUP', 'Time-based trigger installed (checkInboxAndPostNext every 15 min)');
+function isScheduled_() {
+  return ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'runSorter'; });
 }
 
 // ============================================================================
-// MAIN SETUP FUNCTIONS
+// MENU ACTIONS
 // ============================================================================
 
-/**
- * Main setup for Email Sorter module.
- * Creates sheets, prompts for label mode and connection mode, sets up triggers.
- */
-function emailSorterSetup() {
+function sortNowFromMenu() {
   var ui = SpreadsheetApp.getUi();
-  var ss = SpreadsheetApp.getActive();
-
-  ui.alert('Setup Starting', 'Creating sheets and initializing Smart Call Time...', ui.ButtonSet.OK);
-
-  // Create all required sheets
-  createConfigSheet(ss);
-  createLabelsSheet(ss);
-  createQueueSheet(ss);
-  createLogSheet(ss);
-  createInstructionsSheet(ss);
-
-  // ── LABEL MODE ──────────────────────────────────────────────────────────────
-  var labelMode = promptForLabelMode(ui);
-
-  // Always sync existing Gmail labels into the Labels sheet
-  syncLabelsToSheet();
-
-  if (labelMode === 'add_and_scan') {
-    // Offer to add new labels to Gmail now
-    var addNow = ui.alert(
-      'Add Labels',
-      'Your existing Gmail labels have been synced.\n\n' +
-      'Would you like to add a new label to Gmail now?',
-      ui.ButtonSet.YES_NO
-    );
-    if (addNow === ui.Button.YES) {
-      addCustomLabelFromMenu();
-    }
+  var stats = runSorter_({ forceSweep: true });
+  if (stats.busy) {
+    ui.alert('Already sorting', 'A run is in progress. Try again in a minute.', ui.ButtonSet.OK);
+    return;
   }
+  var problem = getStatus('last_error');
+  ui.alert('Sorted',
+    'Sorted ' + (stats.sorted || 0) + ' conversation' + (stats.sorted === 1 ? '' : 's') + ': ' +
+    (stats.rules || 0) + ' by rules, ' + (stats.memory || 0) + ' from memory, ' + (stats.claude || 0) + ' by Claude.\n' +
+    'Archived ' + (stats.archived || 0) + '. Learned from ' + (stats.learned || 0) + ' of your corrections.' +
+    (problem ? '\n\nProblem: ' + problem : '') + '\n\nDetails are on the Log sheet.', ui.ButtonSet.OK);
+}
 
-  // ── CONNECTION MODE ──────────────────────────────────────────────────────────
-  promptForConnectionMode(ui);
+function syncLabelsFromMenu() {
+  var n = syncLabelsToSheet();
+  SpreadsheetApp.getUi().alert('Labels synced', n + ' labels on the Labels sheet.', SpreadsheetApp.getUi().ButtonSet.OK);
+}
 
-  // ── GENERAL SETUP ────────────────────────────────────────────────────────────
-  setupTriggers();
-  promptForInstanceName(ui);
+function showStatus() {
+  var ui = SpreadsheetApp.getUi();
+  var stats = {};
+  try { stats = JSON.parse(getStatus('stats') || '{}'); } catch (e) { stats = {}; }
+  if (stats.day !== todayKey_()) stats = {};
+  var lastRun = Number(getStatus('last_run') || 0);
+  var state = loadState();
+  var senders = loadSenders();
+  var learned = senders.rows.filter(function(r) { return isTrustedSender(r, getConfigNumber('learn_after')); }).length;
+  var problem = getStatus('last_error') || claudeBlockedReason_();
 
-  // Hub / webhook setup is only needed in Chat Hub mode
-  var connectionMode = getConfigValue('connection_mode') || 'chat_hub';
-  if (connectionMode === 'chat_hub') {
-    ensureWebhookUrl(ui);
-    verifyWebhookUrl(ui);
-    promptForHubRegistration(ui);
-  }
-
-  // Navigate to Instructions
-  var instructionsSheet = ss.getSheetByName('Instructions');
-  if (instructionsSheet) {
-    ss.setActiveSheet(instructionsSheet);
-  }
-
-  var modeDesc = connectionMode === 'direct_claude_api'
-    ? 'Direct Claude API (Hub bypassed)'
-    : 'Chat Hub (via Google Chat)';
-
-  ui.alert('Setup Complete!',
-    'Email Sorter is ready.\n\n' +
-    'Label Mode:      ' + (labelMode === 'add_and_scan' ? 'Add & Scan' : 'Scan Only') + '\n' +
-    'Connection Mode: ' + modeDesc + '\n' +
-    'Instance Name:   ' + (getConfigValue('instance_name') || '(not set)') + '\n\n' +
-    (connectionMode === 'direct_claude_api'
-      ? 'Next: Settings > Claude API > Set API Key'
-      : 'Next: Review the Instructions sheet and configure your Google Flows'),
+  ui.alert('Email Sorter status',
+    'Automatic sorting: ' + (isScheduled_() ? 'on, every 10 minutes' : 'PAUSED') + '\n' +
+    'Last run: ' + (lastRun ? formatDate_(new Date(lastRun)) : 'never') + '\n' +
+    'Model: ' + getConfig('claude_model') + ' (effort ' + getConfig('claude_effort') + ')\n' +
+    'API key: ' + (getApiKey() ? 'set' : 'NOT SET') + '\n' +
+    (problem ? 'Problem: ' + problem + '\n' : '') +
+    '\nToday: ' + (stats.sorted || 0) + ' sorted (' + (stats.rules || 0) + ' rules, ' + (stats.memory || 0) +
+    ' memory, ' + (stats.claude || 0) + ' Claude), ' + (stats.archived || 0) + ' archived.\n' +
+    'Claude cost today: about $' + (stats.cost || 0).toFixed(2) + '\n' +
+    '\nSenders known: ' + senders.rows.length + ' (' + learned + ' sorted without Claude)\n' +
+    'Waiting to be archived later: ' + Object.keys(state.due).length,
     ui.ButtonSet.OK);
 }
 
-// ============================================================================
-// LABEL MODE
-// ============================================================================
-
-/**
- * Prompts the user to choose how labels are populated during setup.
- * Both options always use Gmail labels for ongoing operation.
- * Saves the choice to Config sheet as 'label_mode'.
- * Returns the chosen mode: 'add_and_scan' or 'scan_only'.
- *
- * @param {Ui} ui - SpreadsheetApp UI
- * @returns {string} 'add_and_scan' or 'scan_only'
- */
-function promptForLabelMode(ui) {
-  var current = getConfigValue('label_mode') || '';
-  var currentDesc = current === 'add_and_scan' ? 'Add & Scan' : current === 'scan_only' ? 'Scan Only' : 'not set';
-
-  var response = ui.alert(
-    'Label Setup',
-    'Labels are always synced from Gmail. How do you want to set them up now?\n\n' +
-    '• YES → Add & Scan\n' +
-    '  Sync your existing Gmail labels AND add new ones now.\n\n' +
-    '• NO  → Scan Only\n' +
-    '  Sync your existing Gmail labels into the Labels sheet.\n' +
-    '  You can add labels in Gmail and re-sync anytime.\n\n' +
-    (current ? 'Current setting: ' + currentDesc : ''),
-    ui.ButtonSet.YES_NO
-  );
-
-  var mode = (response === ui.Button.YES) ? 'add_and_scan' : 'scan_only';
-  setConfigValue('label_mode', mode);
-  logAction('SYSTEM', 'LABEL_MODE', 'Label mode set to: ' + mode);
-  return mode;
-}
-
-/**
- * Menu action to update the label setup mode at any time.
- * Both modes always use Gmail labels; the choice only affects
- * whether new labels are added during the setup step.
- */
-function switchLabelModeFromMenu() {
+function setApiKeyFromMenu() {
   var ui = SpreadsheetApp.getUi();
-  var mode = promptForLabelMode(ui);
-
-  // Always sync existing Gmail labels regardless of mode
-  syncLabelsToSheet();
-
-  if (mode === 'add_and_scan') {
-    var addNow = ui.alert(
-      'Add Labels',
-      'Your Gmail labels have been synced.\n\n' +
-      'Would you like to add a new label to Gmail now?',
-      ui.ButtonSet.YES_NO
-    );
-    if (addNow === ui.Button.YES) {
-      addCustomLabelFromMenu();
-    }
-  } else {
-    ui.alert('Labels Synced',
-      'Your Gmail labels have been synced to the Labels sheet.\n\n' +
-      'Use Smart Call Time > Email Sorter > Sync Labels Now to refresh anytime.',
-      ui.ButtonSet.OK);
-  }
-}
-
-/**
- * Menu action to add a single custom label to the Labels sheet.
- * Works in both label modes but is most useful in custom mode.
- */
-function addCustomLabelFromMenu() {
-  var ui = SpreadsheetApp.getUi();
-
-  var nameResponse = ui.prompt(
-    'Add Custom Label',
-    'Enter the label name.\n' +
-    'This is what will be applied to emails in Gmail.\n\n' +
-    'Example: Work, Personal, Urgent, Follow-Up, Clients',
-    ui.ButtonSet.OK_CANCEL
-  );
-
-  if (nameResponse.getSelectedButton() !== ui.Button.OK) return;
-  var labelName = nameResponse.getResponseText().trim();
-  if (!labelName) return;
-
-  var descResponse = ui.prompt(
-    'Label Description (optional)',
-    'Add a short description to help the AI understand what this label is for.\n\n' +
-    'Example: "Emails from work colleagues or about work projects"\n\n' +
-    'You can leave this blank.',
-    ui.ButtonSet.OK_CANCEL
-  );
-
-  if (descResponse.getSelectedButton() !== ui.Button.OK) return;
-  var description = descResponse.getResponseText().trim();
-
-  // Write to Labels sheet
-  var ss = SpreadsheetApp.getActive();
-  var sheet = ss.getSheetByName('Labels');
-  if (!sheet) {
-    ui.alert('Error', 'Labels sheet not found. Run Setup first.', ui.ButtonSet.OK);
-    return;
-  }
-
-  var now = new Date().toISOString();
-  var newRow = [labelName, labelName, '', 'Custom', description, now];
-  sheet.appendRow(newRow);
-
-  logAction('SYSTEM', 'CUSTOM_LABEL_ADD', 'Added custom label: ' + labelName);
-
-  ui.alert('Label Added',
-    'Custom label "' + labelName + '" added to the Labels sheet.\n\n' +
-    (description ? 'Description: ' + description : '(no description)') + '\n\n' +
-    'Note: You must also create this label in Gmail for it to be applied to emails.',
-    ui.ButtonSet.OK);
-}
-
-// ============================================================================
-// CONNECTION MODE
-// ============================================================================
-
-/**
- * Prompts the user to choose between Chat Hub mode and Direct Claude API mode.
- * Saves the choice to Config sheet as 'connection_mode'.
- *
- * @param {Ui} ui - SpreadsheetApp UI
- * @returns {string} 'chat_hub' or 'direct_claude_api'
- */
-function promptForConnectionMode(ui) {
-  var current = getConfigValue('connection_mode') || '';
-
-  var response = ui.alert(
-    'Connection Mode',
-    'How should emails be sent to AI for categorization?\n\n' +
-    '• YES → Chat Hub Mode (current default)\n' +
-    '  Emails are posted to Google Chat.\n' +
-    '  The Hub routes them through Google Flows to an AI.\n' +
-    '  Requires Hub registration and a Chat webhook URL.\n\n' +
-    '• NO  → Direct Claude API Mode\n' +
-    '  Emails are sent directly to the Anthropic Claude API.\n' +
-    '  Bypasses the Hub entirely — no Chat, no Flows needed.\n' +
-    '  Requires your own Anthropic API key.\n\n' +
-    (current ? 'Current: ' + (current === 'direct_claude_api' ? 'Direct Claude API' : 'Chat Hub') : ''),
-    ui.ButtonSet.YES_NO
-  );
-
-  var mode = (response === ui.Button.YES) ? 'chat_hub' : 'direct_claude_api';
-  setConfigValue('connection_mode', mode);
-  logAction('SYSTEM', 'CONNECTION_MODE', 'Connection mode set to: ' + mode);
-
-  if (mode === 'direct_claude_api') {
-    ui.alert('Direct Claude API Mode Selected',
-      'The Hub and Google Chat will NOT be used.\n\n' +
-      'Next steps:\n' +
-      '1. Settings > Claude API > Set API Key\n' +
-      '2. Settings > Claude API > Select Model\n' +
-      '3. (Optional) Settings > Claude API > Edit System Prompt\n' +
-      '4. Settings > Claude API > Test Claude API Connection',
-      ui.ButtonSet.OK);
-  }
-
-  return mode;
-}
-
-/**
- * Menu action to switch connection mode at any time.
- */
-function switchConnectionModeFromMenu() {
-  var ui = SpreadsheetApp.getUi();
-  promptForConnectionMode(ui);
-}
-
-/**
- * Prompts the user to set their instance name if not already configured.
- * @param {Ui} ui - The SpreadsheetApp UI object
- */
-function promptForInstanceName(ui) {
-  var currentName = getConfigValue('instance_name');
-
-  if (!currentName) {
-    var response = ui.prompt('Instance Name',
-      'Enter a unique name for this instance.\n\n' +
-      'This name appears in Chat messages and is used by Flow to filter.\n' +
-      'Use letters, numbers, and underscores only.\n\n' +
-      'Example: Johns_Sorter, Sales_Team, Personal_Email',
-      ui.ButtonSet.OK_CANCEL);
-
-    if (response.getSelectedButton() === ui.Button.OK) {
-      var instanceName = response.getResponseText().trim();
-      // Replace spaces with underscores, remove special characters
-      instanceName = instanceName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
-
-      if (instanceName) {
-        setConfigValue('instance_name', instanceName);
-        logAction('SYSTEM', 'CONFIG', 'Instance name set to: ' + instanceName);
-      }
-    }
-  }
-}
-
-/**
- * Ensures the webhook URL (this instance's web app URL) is set in the Config sheet.
- * Tries auto-detection first, then prompts the user to paste it manually.
- * @param {Ui} ui - The SpreadsheetApp UI object
- */
-function ensureWebhookUrl(ui) {
-  // getWebhookUrl() already tries auto-detection and saves to Config sheet
-  var url = getWebhookUrl();
-  if (url) {
-    logAction('CONFIG', 'WEBHOOK_URL_SET', 'Webhook URL: ' + url);
-    return;
-  }
-
-  // Auto-detect failed (not deployed as web app yet, or dev mode)
-  // Prompt the user to paste it manually
-  var response = ui.prompt('Webhook URL',
-    'Could not auto-detect your web app URL.\n\n' +
-    'To find it:\n' +
-    '1. Open Extensions > Apps Script\n' +
-    '2. Click Deploy > Manage deployments\n' +
-    '3. Copy the Web app URL\n\n' +
-    'Paste your deployed web app URL:',
+  var current = getApiKey();
+  var response = ui.prompt('Claude API key',
+    (current ? 'A key is set (' + current.substring(0, 10) + '…). Paste a new one to replace it.\n\n' : '') +
+    'Create a key at console.anthropic.com > API Keys. It starts with sk-ant-.\n' +
+    'It is stored privately for your Google account, not in this spreadsheet.',
     ui.ButtonSet.OK_CANCEL);
-
-  if (response.getSelectedButton() === ui.Button.OK) {
-    var manualUrl = response.getResponseText().trim();
-    if (manualUrl && manualUrl.indexOf('script.google.com') !== -1) {
-      setWebhookUrl(manualUrl);
-      logAction('CONFIG', 'WEBHOOK_URL_MANUAL', 'Manually set webhook URL: ' + manualUrl);
-    } else if (manualUrl) {
-      ui.alert('Invalid URL',
-        'That doesn\'t look like a Google Apps Script web app URL.\n' +
-        'It should start with https://script.google.com/macros/s/\n\n' +
-        'You can set it later in the Config sheet (webhook_url row).',
-        ui.ButtonSet.OK);
-    }
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  var key = response.getResponseText().trim();
+  if (!key) return;
+  if (key.indexOf('sk-ant-') !== 0) {
+    ui.alert('That does not look like a key', 'Claude API keys start with sk-ant-.', ui.ButtonSet.OK);
+    return;
   }
+  setApiKey(key);
+  clearClaudeBlock();
+  ui.alert('Saved', 'API key saved.', ui.ButtonSet.OK);
 }
 
-/**
- * Verifies the webhook URL is reachable by sending a GET request to it.
- * If the GET fails or returns an error page, warns the user and offers
- * to set the URL manually.
- *
- * @param {Ui} ui - The SpreadsheetApp UI object
- */
-function verifyWebhookUrl(ui) {
-  var url = getConfigValue('webhook_url');
-  if (!url) return; // Nothing to verify
+function chooseModelFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+  var current = getConfig('claude_model');
+  var list = CLAUDE_MODELS.map(function(m, i) {
+    return (i + 1) + '. ' + m.name + (m.id === current ? '  ← current' : '') + '\n   ' + m.price + '\n   ' + m.note;
+  }).join('\n\n');
+  var response = ui.prompt('Choose model', list + '\n\nEnter 1-' + CLAUDE_MODELS.length + ':', ui.ButtonSet.OK_CANCEL);
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  var n = parseInt(response.getResponseText(), 10);
+  if (!(n >= 1 && n <= CLAUDE_MODELS.length)) return;
+  setConfig('claude_model', CLAUDE_MODELS[n - 1].id);
+  clearClaudeBlock();
+  ui.alert('Model set', CLAUDE_MODELS[n - 1].name + ' will sort new mail.', ui.ButtonSet.OK);
+}
 
-  logAction('CONFIG', 'WEBHOOK_VERIFY', 'Verifying webhook URL: ' + url);
-
+function testClaudeFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+  var labels = readLabels();
+  var names = labels.aiList.map(function(l) { return l.name; });
+  var prompt = {
+    labelNames: names,
+    schema: buildClassifierSchema(names),
+    system: buildClassifierSystemPrompt(labels.aiList, getConfig('sorting_notes'), [])
+  };
+  var sample = {
+    fromHeader: 'Jordan Blake <jordan@growthly-example.com>', recipientCount: 1, yourPosition: 'To',
+    youWroteInThread: false, messageCount: 1, automatedAddress: false,
+    bulkHeaders: ['has an unsubscribe header'], outreachSignals: ['hubspot'], trackingPixel: true,
+    linkHosts: ['growthly-example.com', 'hubspotlinks.com', 'meetings.hubspot.com'],
+    subject: 'Quick question', date: new Date(),
+    body: 'Hi there, I noticed your team is growing fast. We help companies like yours cut onboarding time ' +
+      'in half. Worth a quick 15-minute chat next week? [link: meetings.hubspot.com]\n\nNot interested? Let me know.'
+  };
   try {
-    var response = UrlFetchApp.fetch(url, {
-      method: 'GET',
-      muteHttpExceptions: true,
-      followRedirects: true
-    });
-
-    var code = response.getResponseCode();
-    var body = response.getContentText();
-
-    logAction('CONFIG', 'WEBHOOK_VERIFY_RESULT', 'HTTP ' + code + ' | ' + body.substring(0, 200));
-
-    if (code === 200) {
-      // Check the response looks like our doGet (JSON with status field)
-      try {
-        var parsed = JSON.parse(body);
-        if (parsed.status && parsed.status.indexOf('Webhook Active') !== -1) {
-          logAction('CONFIG', 'WEBHOOK_VERIFY_OK', 'Webhook URL verified successfully');
-          return; // All good
-        }
-      } catch (e) {
-        // Not JSON — might be an error page
-      }
-    }
-
-    // URL returned something unexpected (error page, redirect to Google login, etc.)
-    logAction('CONFIG', 'WEBHOOK_VERIFY_WARN', 'Webhook URL returned unexpected response: HTTP ' + code);
-
-    var bodyPreview = body.length > 300 ? body.substring(0, 300) + '...' : body;
-    var result = ui.alert('Webhook URL Warning',
-      'The stored webhook URL may not be working correctly.\n\n' +
-      'URL: ' + url + '\n' +
-      'HTTP Status: ' + code + '\n' +
-      'Response: ' + bodyPreview + '\n\n' +
-      'This can happen if the web app was re-deployed.\n\n' +
-      'Would you like to update the webhook URL now?',
-      ui.ButtonSet.YES_NO);
-
-    if (result === ui.Button.YES) {
-      // Clear the bad URL and prompt for a new one
-      setConfigValue('webhook_url', '');
-      ensureWebhookUrl(ui);
-    }
-
-  } catch (error) {
-    logAction('CONFIG', 'WEBHOOK_VERIFY_ERROR', 'Failed to reach webhook URL: ' + error.message);
-
-    var result = ui.alert('Webhook URL Error',
-      'Could not reach your webhook URL:\n' + url + '\n\n' +
-      'Error: ' + error.message + '\n\n' +
-      'Would you like to update the webhook URL now?',
-      ui.ButtonSet.YES_NO);
-
-    if (result === ui.Button.YES) {
-      setConfigValue('webhook_url', '');
-      ensureWebhookUrl(ui);
-    }
-  }
-}
-
-/**
- * Menu action to manually set or update the webhook URL.
- */
-function setWebhookUrlFromMenu() {
-  var ui = SpreadsheetApp.getUi();
-  var currentUrl = getConfigValue('webhook_url') || '(not set)';
-
-  var response = ui.prompt('Set Webhook URL',
-    'Current webhook URL:\n' + currentUrl + '\n\n' +
-    'Enter your deployed web app URL:\n' +
-    '(Find it in Deploy > Manage deployments in the Apps Script editor)',
-    ui.ButtonSet.OK_CANCEL);
-
-  if (response.getSelectedButton() === ui.Button.OK) {
-    var url = response.getResponseText().trim();
-    if (url && url.indexOf('script.google.com') !== -1) {
-      setWebhookUrl(url);
-      ui.alert('Saved', 'Webhook URL updated in Config sheet.', ui.ButtonSet.OK);
-      logAction('CONFIG', 'WEBHOOK_URL_MANUAL', 'Webhook URL set from menu: ' + url);
-    } else if (url) {
-      ui.alert('Invalid URL',
-        'That doesn\'t look like a Google Apps Script web app URL.\n' +
-        'It should start with https://script.google.com/macros/s/',
-        ui.ButtonSet.OK);
-    }
-  }
-}
-
-/**
- * Refreshes all modules - syncs labels, updates instructions.
- */
-function refreshAll() {
-  var ui = SpreadsheetApp.getUi();
-
-  syncLabelsToSheet();
-
-  ui.alert('Refresh Complete',
-    'All data has been refreshed.',
-    ui.ButtonSet.OK);
-}
-
-/**
- * Non-destructively patches any missing Config keys and verifies all sheet
- * headers exist.  Safe to run at any time — existing data is never modified
- * or deleted.
- *
- * What it does:
- *  1. Reads the Config sheet and identifies which canonical keys are absent.
- *  2. Appends the missing rows (key, default value, description) at the bottom.
- *  3. Verifies that Log, Queue, and Labels sheets exist; recreates Log if missing.
- *  4. Alerts the user with a summary of what was added / already present.
- */
-function refreshTables() {
-  var ui = SpreadsheetApp.getUi();
-  var ss = SpreadsheetApp.getActive();
-
-  var added = [];
-
-  // ── 1. Config sheet ──────────────────────────────────────────────────────────
-  var configSheet = ss.getSheetByName('Config');
-  if (!configSheet) {
-    ui.alert('Config Sheet Missing',
-      'The Config sheet was not found.\n\n' +
-      'Run Smart Call Time > Email Sorter > Setup / Refresh to create it.',
+    var answer = classifyWithClaude(sample, false, prompt);
+    clearClaudeBlock();
+    ui.alert('Claude is working',
+      'Model: ' + (answer.model || getConfig('claude_model')) + '\n' +
+      'Test email (a HubSpot-style sales pitch) was read as: ' + answer.ai.sender_type +
+      ', label ' + answer.ai.label + ', confidence ' + answer.ai.confidence + '.\n' +
+      'Reason: ' + answer.ai.reason + '\n\nCost: about $' + (answer.cost || 0).toFixed(4),
       ui.ButtonSet.OK);
-    return;
-  }
-
-  // Canonical list: every key the system expects, with safe defaults.
-  // Order matches createConfigSheet() in SheetSetup.gs, with none_label appended.
-  var canonicalConfig = [
-    ['label_mode',          'scan_only',          'Label setup mode: "scan_only" = sync existing Gmail labels, "add_and_scan" = also create new labels during setup.'],
-    ['connection_mode',     'chat_hub',            'AI routing: "chat_hub" = via Google Chat + Hub + Flows, "direct_claude_api" = direct Anthropic API (bypasses Hub).'],
-    ['claude_api_key',      '',                    'Anthropic API key (sk-ant-...). Required for Direct Claude API mode. Set via Settings > Claude API > Set API Key.'],
-    ['claude_model',        'claude-sonnet-4-6',   'Claude model for Direct API mode. Change via Settings > Claude API > Select Model. Options: claude-opus-4-6 (most capable), claude-sonnet-4-6 (recommended), claude-haiku-4-5 (fastest/cheapest).'],
-    ['claude_system_prompt','',                    'System prompt / instruction packet sent to Claude. Leave blank to use the built-in default.'],
-    ['chat_webhook_url',    '',                    'Webhook URL for Google Chat space. Used in Chat Hub mode to post messages.'],
-    ['webhook_url',         '',                    'This instance\'s deployed web app URL. Hub sends webhooks here. Auto-detected on setup, or set via Settings > Set Webhook URL.'],
-    ['instance_name',       '',                    'Your instance name. Appears in Chat messages so Hub can route to you.'],
-    ['hub_registered',      'false',               'Whether this instance is registered with the Hub.'],
-    ['rate_limit_ms',       '3000',                'Milliseconds to wait between processing emails in batch mode.'],
-    ['batch_size',          '50',                  'Maximum number of emails to queue at once.'],
-    ['last_label_sync',     '',                    'Timestamp of last Gmail label sync.'],
-    ['setup_complete',      'true',                'Whether initial setup has been completed.'],
-    ['version',             '1.2.0',               'Version of Smart Call Time installed.'],
-    ['none_label',          'Needs Review',        'Gmail label applied to emails Claude cannot categorize (NONE response). Prevents them from looping back into the re-scan queue. Change to any valid Gmail label name.']
-  ];
-
-  // Build a lookup of keys already present in the Config sheet
-  var lastRow = configSheet.getLastRow();
-  var existingKeys = {};
-  if (lastRow > 1) {
-    var existingData = configSheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    existingData.forEach(function(row) {
-      if (row[0]) {
-        existingKeys[row[0].toString().toLowerCase()] = true;
-      }
-    });
-  }
-
-  // Append only the missing rows — never touch existing rows
-  canonicalConfig.forEach(function(row) {
-    var key = row[0];
-    if (!existingKeys[key.toLowerCase()]) {
-      configSheet.appendRow(row);
-      added.push(key);
-    }
-  });
-
-  // ── 2. Log sheet ─────────────────────────────────────────────────────────────
-  var logSheet = ss.getSheetByName('Log');
-  if (!logSheet) {
-    logSheet = ss.insertSheet('Log');
-    logSheet.getRange(1, 1, 1, 6).setValues([['Timestamp', 'Email ID', 'Action', 'Details', 'Result', 'Notes']]);
-    logSheet.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#ea4335').setFontColor('white');
-    logSheet.setFrozenRows(1);
-    added.push('(Log sheet recreated)');
-  }
-
-  // ── 3. Warn about missing Queue / Labels sheets (can't recreate safely) ──────
-  var missingSheets = [];
-  if (!ss.getSheetByName('Queue'))  missingSheets.push('Queue');
-  if (!ss.getSheetByName('Labels')) missingSheets.push('Labels');
-
-  // ── 4. Log and report ────────────────────────────────────────────────────────
-  logAction('SYSTEM', 'REFRESH_TABLES',
-    'Added ' + added.length + ' missing item(s): ' + (added.join(', ') || 'none'));
-
-  var message;
-  if (added.length === 0 && missingSheets.length === 0) {
-    message = 'Everything is already up to date.\n\nNo changes were made.';
-  } else {
-    message = '';
-    if (added.length > 0) {
-      message += 'Added missing items:\n' +
-        added.map(function(k) { return '  + ' + k; }).join('\n');
-    }
-    if (missingSheets.length > 0) {
-      if (message) message += '\n\n';
-      message += 'Warning — the following sheets are missing:\n' +
-        missingSheets.map(function(s) { return '  ! ' + s; }).join('\n') + '\n\n' +
-        'Run Setup / Refresh to recreate them.';
-    }
-    if (added.length > 0) {
-      message += '\n\nExisting data was not modified.';
-    }
-  }
-
-  ui.alert('Refresh Tables', message, ui.ButtonSet.OK);
-}
-
-/**
- * Prompts the user to register with the Hub during setup.
- * Registration goes through Google Chat - no Hub URL needed.
- * @param {Ui} ui - The SpreadsheetApp UI object
- */
-function promptForHubRegistration(ui) {
-  var chatWebhookUrl = getChatWebhookUrl();
-
-  if (!chatWebhookUrl) {
-    ui.alert('Chat Webhook Not Set',
-      'To register with the Hub, you need a Chat webhook URL.\n\n' +
-      'Set chat_webhook_url in the Config sheet first.\n' +
-      'You can register later via Settings > Register with Hub.',
-      ui.ButtonSet.OK);
-    return;
-  }
-
-  var webhookUrl = getWebhookUrl();
-  if (!webhookUrl) {
-    // Try to let user set it right now instead of dead-ending
-    ensureWebhookUrl(ui);
-    webhookUrl = getConfigValue('webhook_url');
-    if (!webhookUrl) {
-      ui.alert('Webhook URL Not Set',
-        'Your web app URL is not set in the Config sheet.\n\n' +
-        'You can set it anytime via:\n' +
-        '  Settings > Set Webhook URL\n' +
-        '  Or edit the Config sheet directly (webhook_url row)',
-        ui.ButtonSet.OK);
-      return;
-    }
-  }
-
-  var response = ui.alert(
-    'Hub Registration',
-    'Register this sheet with the Central Hub?\n\n' +
-    'This posts a REGISTER message to the Chat space.\n' +
-    'The Hub will see it, store your webhook URL, and confirm.\n\n' +
-    'Chat webhook: ' + chatWebhookUrl.substring(0, 50) + '...\n' +
-    'Your webhook: ' + webhookUrl.substring(0, 50) + '...',
-    ui.ButtonSet.YES_NO
-  );
-
-  if (response !== ui.Button.YES) {
-    return;
-  }
-
-  var result = registerWithHub();
-  if (result.success) {
-    ui.alert('Registration Sent',
-      'Registration message posted to Chat.\n\n' +
-      'The Hub will:\n' +
-      '1. See the REGISTER message\n' +
-      '2. Store your webhook URL in the Registry sheet\n' +
-      '3. Send a confirmation webhook to your web app\n' +
-      '4. Delete the registration chat message\n\n' +
-      'Check the Log sheet for confirmation.',
-      ui.ButtonSet.OK);
-  } else {
-    ui.alert('Registration Failed', result.error || 'Unknown error', ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert('Claude test failed', e.message, ui.ButtonSet.OK);
   }
 }
 
-/**
- * Menu action for registering/re-registering with the Hub.
- * Registration goes through Google Chat - no Hub URL needed.
- */
-function registerWithHubFromMenu() {
-  var ui = SpreadsheetApp.getUi();
-
-  var chatWebhookUrl = getChatWebhookUrl();
-  if (!chatWebhookUrl) {
-    ui.alert('Not Configured',
-      'Chat webhook URL not set.\n\n' +
-      'Set chat_webhook_url in the Config sheet first.\n' +
-      '(Unhide the Config sheet: right-click the sheet tab bar)',
-      ui.ButtonSet.OK);
-    return;
-  }
-
-  var webhookUrl = getWebhookUrl();
-  if (!webhookUrl) {
-    ensureWebhookUrl(ui);
-    webhookUrl = getConfigValue('webhook_url');
-    if (!webhookUrl) {
-      ui.alert('Webhook URL Not Set',
-        'Your web app URL is not set.\n\n' +
-        'Set it via Settings > Set Webhook URL\n' +
-        'or edit the Config sheet directly (webhook_url row).',
-        ui.ButtonSet.OK);
-      return;
-    }
-  }
-
-  var result = registerWithHub();
-
-  if (result.success) {
-    ui.alert('Registration Sent',
-      'REGISTER message posted to Chat.\n' +
-      'Hub will confirm via webhook. Check Log sheet.',
-      ui.ButtonSet.OK);
-  } else {
-    ui.alert('Failed', 'Could not register: ' + (result.error || 'Unknown error'), ui.ButtonSet.OK);
-  }
-}
-
-// ============================================================================
-// AUTHORIZATION
-// ============================================================================
-
-/**
- * Touches all OAuth scopes so the consent prompt covers everything at once.
- * Run this function once (from the editor or via clasp run) to authorize.
- * After approving, all other functions will work without further prompts.
- */
+/** Run once from the Apps Script editor (or setup.sh) to grant every permission. */
 function authorize() {
-  // Gmail scopes
   GmailApp.getUserLabels();
-
-  // Spreadsheet scope
   SpreadsheetApp.getActive();
-
-  // External request scope (UrlFetchApp)
-  UrlFetchApp.getRequest && UrlFetchApp;
-
-  Logger.log('All scopes authorized successfully.');
-  return { status: 'authorized', scopes: 'gmail, spreadsheets, urlfetch' };
-}
-
-// ============================================================================
-// UTILITY SHORTCUTS (Delegates to modules)
-// ============================================================================
-
-/**
- * Shows the current configuration.
- */
-function showConfig() {
-  var ui = SpreadsheetApp.getUi();
-
-  var connectionMode = getConfigValue('connection_mode') || 'chat_hub';
-  var labelMode = getConfigValue('label_mode') || 'gmail';
-  var apiKey = getConfigValue('claude_api_key') || '';
-  var maskedKey = apiKey ? apiKey.substring(0, 12) + '...' : '(not set)';
-
-  var config = [
-    '── General ──',
-    'Instance Name:    ' + (getConfigValue('instance_name') || '(not set)'),
-    'Label Mode:       ' + (labelMode === 'custom' ? 'Custom Labels' : 'Gmail Labels'),
-    'Connection Mode:  ' + (connectionMode === 'direct_claude_api' ? 'Direct Claude API' : 'Chat Hub'),
-    '',
-    '── Claude API (direct mode) ──',
-    'API Key:          ' + maskedKey,
-    'Model:            ' + (getConfigValue('claude_model') || 'claude-sonnet-4-5'),
-    'System Prompt:    ' + (getConfigValue('claude_system_prompt') ? 'Custom (set)' : 'Default'),
-    '',
-    '── Chat Hub ──',
-    'Chat Webhook:     ' + (getChatWebhookUrl() ? 'Set' : 'NOT SET'),
-    'Webhook URL:      ' + (getWebhookUrl() || '(not set)'),
-    'Hub Registered:   ' + (getConfigValue('hub_registered') || 'false'),
-    '',
-    '── Processing ──',
-    'Rate Limit:       ' + (getConfigValue('rate_limit_ms') || '3000') + 'ms',
-    'Batch Size:       ' + (getConfigValue('batch_size') || '50'),
-    'Last Label Sync:  ' + (getConfigValue('last_label_sync') || 'Never'),
-  ].join('\n');
-
-  ui.alert('Configuration', config, ui.ButtonSet.OK);
+  ScriptApp.getProjectTriggers();
+  PropertiesService.getUserProperties();
+  try { Session.getEffectiveUser().getEmail(); } catch (e) { /* optional */ }
+  try { UrlFetchApp.fetch('https://api.anthropic.com', { muteHttpExceptions: true }); } catch (e) { /* only to request permission */ }
+  return 'authorized';
 }

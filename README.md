@@ -1,554 +1,157 @@
-# Smart Call Time - Email Sorter
+# Email Sorter
 
-A Google Workspace integration for sorting emails using Google Flows + AI with multi-user support via Central Hub.
+A Google Apps Script, attached to a Google Sheet, that keeps your Gmail inbox down to mail that needs you. It labels every new email and moves what you don't need to see out of the inbox.
 
-## Architecture
+It runs every 10 minutes inside your own Google account. The only outside service it talks to is the Claude API.
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                              CENTRAL HUB                                   │
-│                    (Single deployment for all users)                       │
-│                                                                            │
-│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                   │
-│   │ UserRegistry│    │MessageRouter│    │ ChatManager │                   │
-│   └─────────────┘    └─────────────┘    └─────────────┘                   │
-│                              │                                             │
-└──────────────────────────────┼─────────────────────────────────────────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                    │
-          ▼                    ▼                    ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   USER SHEET A  │  │   USER SHEET B  │  │   USER SHEET C  │
-│                 │  │                 │  │                 │
-│ ┌─────────────┐ │  │ ┌─────────────┐ │  │ ┌─────────────┐ │
-│ │QueueProcess │ │  │ │QueueProcess │ │  │ │QueueProcess │ │
-│ │LabelManager │ │  │ │LabelManager │ │  │ │LabelManager │ │
-│ │InboundHook  │ │  │ │InboundHook  │ │  │ │InboundHook  │ │
-│ └─────────────┘ │  │ └─────────────┘ │  │ └─────────────┘ │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-```
+## How it decides
 
-**Flow:**
-1. User's sheet sends email to Hub → Hub forwards to Chat space for AI
-2. AI responds with labels → Hub routes to user's webhook
-3. User's sheet applies labels to email
+Each new conversation goes through these steps. The first one with an answer wins.
 
----
+| Step | What | Costs |
+|---|---|---|
+| 1. Your choices | Senders you marked yourself (Senders sheet, Source = `you`) | free |
+| 2. Rules | Exact matches on the Rules sheet. GitHub notifications are handled here. | free |
+| 3. Memory | Senders it has learned, or that you accepted from Suggestions | free |
+| 4. Claude | Everything else. Claude picks one of your labels, says what kind of sender it is, and how sure it is. | ~$0.005 per email on Sonnet 5.5 |
 
-## Project Structure
+There is one rule on top of those steps: **mail from people you know is never archived.** That means anyone you have emailed, any conversation you wrote in, and anything you sent. Only your own explicit choice (step 1) can override it.
 
-```
-Email-sorter-for-Smart-Call-Time/
-├── setup.sh                    # UNIFIED setup script (handles both User & Hub)
-├── README.md                   # This file
-│
-├── src/                        # USER INSTANCE CODE
-│   ├── appsscript.json         # Manifest (permissions, webapp config)
-│   ├── Main.gs                 # Entry points, menu, triggers
-│   ├── SheetSetup.gs           # Sheet creation and instructions
-│   ├── LabelManager.gs         # Gmail label operations
-│   ├── QueueProcessor.gs       # Email queue processing
-│   ├── OutboundNotification.gs # Send emails to Chat for AI
-│   ├── InboundWebhook.gs       # Receive labels from Hub
-│   ├── ConfigManager.gs        # Configuration management
-│   └── Logger.gs               # Logging utilities
-│
-├── central-hub/                # CENTRAL HUB CODE
-│   ├── appsscript.json         # Manifest (Chat app + webapp)
-│   ├── HubMain.gs              # Entry points (doPost, doGet, onMessage)
-│   ├── HubConfig.gs            # Configuration management
-│   ├── UserRegistry.gs         # User registration/management
-│   ├── MessageRouter.gs        # Parse messages, route to users
-│   ├── PendingRequests.gs      # Track requests awaiting AI response
-│   ├── ChatManager.gs          # Send messages to Chat space
-│   ├── HubSetup.gs             # Admin menu and setup
-│   └── README.md               # Hub-specific documentation
-```
+Claude puts every sender into one of four types:
 
----
+- **person**: a human writing to you. Always stays in the inbox.
+- **cold_outreach**: a sales or marketing email made to look personal, such as a HubSpot, Apollo or Outreach sequence. It gets the `Cold Outreach` label and is archived and marked read. To catch these, Claude is told whether you have ever emailed the sender, whether the email has tracking links or a tracking pixel, and which sales tools' fingerprints appear in it.
+- **automated**: notifications, receipts, alerts.
+- **bulk**: newsletters and promotions.
 
-# INSTALLATION
+For automated and bulk mail, what happens next is the **Inbox action** of the label Claude chose, which you set on the Labels sheet:
 
-## Prerequisites
+| Inbox action | Effect |
+|---|---|
+| Keep in inbox | Labelled, stays put (the default for every label) |
+| Archive | Labelled and archived |
+| Archive + mark read | Labelled, archived, marked read |
+| Archive after days | Stays for N days, then archived |
 
-1. **Node.js** (use v20 LTS, NOT v25 which has memory bugs):
-   ```bash
-   # Mac
-   brew install node@20
+Two things keep an email in the inbox whatever its label says: Claude marks it as needing your attention (a failed payment, an unexpected security alert, a direct question), or Claude isn't sure. Unsure emails also get the `Needs Review` label.
 
-   # Windows - download from https://nodejs.org/ (LTS version)
-   ```
+### GitHub
 
-2. **Clasp CLI**:
-   ```bash
-   npm install -g @google/clasp
-   clasp login
-   ```
+The Rules sheet starts with four rules based on GitHub's `X-GitHub-Reason` header:
 
-3. **Clone the repository**:
-   ```bash
-   git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git
-   cd Email-sorter-for-Smart-Call-Time
-   ```
+| Reason | What happens |
+|---|---|
+| `review_requested`, `mention`, `team_mention`, `assign`, `security_alert` | Kept in the inbox |
+| `ci_activity`, `push`, `subscribed`, `state_change`, `your_activity` | Archived and marked read |
+| `comment`, `author`, `manual` | Kept for 2 days, then archived |
+| anything else from `notifications@github.com` | Kept for 2 days, then archived |
 
----
+If you reply to one, its scheduled archive is cancelled. To cut volume at the source, open GitHub → Settings → Notifications, set Actions emails to "only failed workflows", and unwatch repos you don't need.
 
-## Quick Start
+## Teaching it
 
-The unified setup script handles both Hub and User Instance deployments:
+All of this works from Gmail, including on your phone:
+
+- **Apply `Sorter/Always keep`** to an email. That sender is never archived again.
+- **Apply `Sorter/Always archive`** to an email. That sender is always archived and marked read. Use this for HubSpot-style mail that slips through.
+- **Move something from `Sorter/Archived` back to the inbox.** That sender's mail stays in the inbox from now on.
+
+Each of these becomes a row on the Senders sheet. The rows are also given to Claude as examples, so it treats similar senders the same way. You can edit the Senders sheet directly too: changing a Label, Inbox action or Type marks the row as your choice. A row for `@example.com` covers everyone at that domain.
+
+Everything the sorter archives carries the `Sorter/Archived` label, so you can always see what it moved. Every decision and its reason is on the Log sheet, and each subject there links to the email.
+
+## Choosing labels
+
+**Email Sorter → Suggest labels from my mail…** looks at the sender and subject (never the body) of up to 400 conversations from the last 60 days. It asks Claude for 5–15 labels with descriptions and inbox actions, plus which frequent senders belong in each, and writes them to a Suggestions sheet. Untick what you don't want, edit anything, then choose **Apply checked suggestions**.
+
+Claude only chooses labels ticked "Claude can choose it" on the Labels sheet. The description column is what Claude reads, so one clear sentence per label makes the biggest difference to accuracy. If you create labels in Gmail, run **Sync labels from Gmail** to add them.
+
+`sorting_notes` on the Config sheet is for anything Claude should know about you, in plain English. For example: "I run a startup; investor and customer emails always need my attention."
+
+## Installation
+
+You need [Node.js](https://nodejs.org/) (v20 LTS) and clasp:
 
 ```bash
-cd Email-sorter-for-Smart-Call-Time
-./setup.sh
+npm install -g @google/clasp
 ```
 
-You'll be asked:
-1. **What are you setting up?** → User Instance or Central Hub
-2. **What would you like to do?** → Create new, Update existing, or Switch account
+```bash
+clasp login
+```
 
----
-
-## Part 1: Deploy the Central Hub (One-Time Setup)
-
-The Central Hub is deployed ONCE and shared by all users.
-
-### Automated Setup
+Then, from this folder:
 
 ```bash
 ./setup.sh
 ```
 
-1. Choose **"Central Hub"** when asked what you're setting up
-2. Choose **"Create NEW project"**
-3. The script will create a Google Sheet, push code, and deploy
+- **New sheet:** choose 1. The script creates the sheet and pushes the code.
+- **Upgrading the old Hub version:** choose 2 and use your existing Script ID. It also offers to remove the old public web app deployment, which is no longer used.
 
-**Save the Hub URL** that's displayed at the end - users need this!
+Then open the sheet, refresh, and click **Email Sorter → Set up / upgrade**. It will:
 
-### Option B: Manual Setup
+- create or upgrade the sheets, keeping your label descriptions
+- move your Claude API key out of the Config sheet into private script storage, or ask for one
+- switch older models to Claude Sonnet 5.5
+- remove the old Queue and Instructions sheets
+- create the Sorter labels in Gmail
+- start sorting every 10 minutes
 
-<details>
-<summary>Click to expand manual setup steps</summary>
+Next, set an Inbox action for each label, then **Sort now** and read the Log sheet.
 
-#### Step 1: Create Hub Google Sheet
+An API key comes from [console.anthropic.com](https://console.anthropic.com) → API Keys.
 
-1. Go to [sheets.new](https://sheets.new) and create a new spreadsheet
-2. Name it "Smart Call Time Hub"
-3. Note the Sheet ID from the URL
+## Models and cost
 
-#### Step 2: Create Hub Apps Script Project
+| Model | Price per million tokens (in / out) | Notes |
+|---|---|---|
+| Claude Sonnet 5.5 (default) | $2 / $10 | Cheaper than the Sonnet 4.6 the old version used ($3 / $15) |
+| Claude Haiku 5.5 | $0.10 / $0.50 | About 20x cheaper; worth trying once the Log shows sorting you trust |
+| Claude Opus 5.5 | $4 / $20 | Rarely needed for sorting |
 
-1. In the spreadsheet, click **Extensions > Apps Script**
-2. Delete the default `Code.gs` content
-3. Create each file and copy content from `central-hub/`:
+Change it with **Settings → Choose model**. **Status** shows today's estimated spend. Each email is a single request with the effort setting on `low`. Your labels and instructions are cached between emails, and repeat senders stop costing anything once learned.
 
-| File to Create | Copy From |
-|---------------|-----------|
-| HubMain.gs | central-hub/HubMain.gs |
-| HubConfig.gs | central-hub/HubConfig.gs |
-| UserRegistry.gs | central-hub/UserRegistry.gs |
-| MessageRouter.gs | central-hub/MessageRouter.gs |
-| PendingRequests.gs | central-hub/PendingRequests.gs |
-| ChatManager.gs | central-hub/ChatManager.gs |
-| HubSetup.gs | central-hub/HubSetup.gs |
+Claude's answer is forced into a fixed format (structured outputs), so it can only name one of your labels. On Sonnet and Opus, if a safety filter declines an email, the API retries it on another model. If your key is rejected or your credits run out, rules and memory keep working and Claude is retried hourly.
 
-4. Replace `appsscript.json` content (click gear icon > Show manifest)
+## Sheets
 
-#### Step 3: Deploy Hub as Web App
+| Sheet | What it holds |
+|---|---|
+| Start Here | How it works |
+| Labels | Each label's description, inbox action, archive-after days, and whether Claude can choose it |
+| Rules | Matches that run before Claude: a field (From, To, Cc, Subject, Body or any header name), text to look for (`a \| b` for either), and a label/action |
+| Senders | Sender memory: label, action, type, source (`you`, `rescued`, `suggested`, `claude`), and whether you have emailed them |
+| Log | Newest first: who, subject (linked), what decided it, label, what happened, why |
+| Config | Settings |
 
-1. Click **Deploy > New deployment**
-2. Click gear icon > **Web app**
-3. Configure:
-   - Execute as: **Me**
-   - Who has access: **Anyone**
-4. Click **Deploy**
-5. Copy the **Web app URL** - this is your `HUB_URL`
-
-</details>
-
-### Post-Deployment Configuration
-
-After deploying (either method):
-
-1. **Open the Hub spreadsheet** and refresh the page
-2. **Run initial setup**: Hub Admin > Initial Setup
-3. **Configure Chat Webhook** (for outbound messages):
-   - Open Google Chat, create/open a space
-   - Space settings > Integrations > Webhooks > Add webhook
-   - Copy the webhook URL
-   - Hub Admin > Configure Chat Webhook > Paste URL
-4. **Configure Chat Space ID** (for auto-inviting users):
-   - Get your space ID from the Chat URL: `https://chat.google.com/room/XXXXXXXXX`
-   - Hub Admin > Configure Chat Space > Enter `spaces/XXXXXXXXX`
-
-### (Optional) Deploy as Chat App
-
-To receive AI responses directly via Chat app:
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create or select a project
-3. Enable the **Google Chat API**
-4. Configure Chat API:
-   - App name: Smart Call Time Hub
-   - Functionality: "Receive 1:1 messages" and "Join spaces"
-   - Connection settings: Apps Script project
-   - Script ID: (from Apps Script > Project Settings)
-5. Save and wait for propagation
-
----
-
-## Part 2: Deploy User Instance
-
-Each user runs this setup to create their own sheet and connect to the Hub.
-
-### Automated Setup
-
-```bash
-./setup.sh
-```
-
-1. Choose **"User Instance"** when asked what you're setting up
-2. Choose **"Create NEW project"** (or "Update existing" if reconnecting)
-3. Follow the prompts
-
-The setup will:
-- Create your Google Sheet with all required tabs
-- Push the code to Apps Script
-- Deploy as web app
-
-### Manual Setup (Alternative)
-
-1. Create a new Google Sheet
-2. Open **Extensions > Apps Script**
-3. Get Script ID from **Project Settings**
-4. Create `.clasp.json` in `src/` folder:
-   ```bash
-   cd src
-   echo '{"scriptId":"YOUR_SCRIPT_ID","rootDir":"."}' > .clasp.json
-   clasp push
-   ```
-5. In spreadsheet: Click **Smart Call Time > Email Sorter > Setup**
-6. Deploy as web app and register with Hub manually
-
-### Reconnecting to Hub
-
-If you need to re-register with the Hub:
-
-```bash
-./setup.sh --reconnect
-```
-
-Or from the menu, choose option 3.
-
----
-
-## Part 3: Configure Google Flow
-
-### Create Flow for New Emails
-
-1. Go to [Google Flows](https://flows.google.com)
-2. Create new Flow: "Email Categorizer"
-3. Trigger: **When a new email arrives in Gmail**
-4. Add action: **Get email labels** (read Labels sheet from your spreadsheet)
-5. Add action: **AI analysis** with prompt:
-
-```
-You are an email categorizer. Based on the email content below, select the most appropriate labels from the available options.
-
-AVAILABLE LABELS:
-{{labels_from_sheet}}
-
-EMAIL:
-Subject: {{email.subject}}
-From: {{email.from}}
-Body: {{email.body}}
-
-Respond with ONLY the label names, comma-separated. Example: "Work, Important"
-```
-
-6. Add action: **Send message to Google Chat**
-   - Use the Hub's Chat space
-   - Include instance_name in message so Hub knows where to route
-
-### Create Flow for Old Emails (Queue Processing)
-
-1. Trigger: **When spreadsheet row changes** (Status column = "Processing")
-2. Read the Context column for full email content
-3. Same AI analysis step
-4. Send to Chat with instance_name
-
----
-
-## Updating Code
-
-After pulling updates from GitHub:
-
-```bash
-cd Email-sorter-for-Smart-Call-Time
-git pull
-cd src
-clasp push
-```
-
-**Memory error fix** (Node v25 bug):
-```bash
-NODE_OPTIONS="--max-old-space-size=8192" clasp push
-```
-
----
-
-## Sheets Reference
-
-### User Instance Sheets
-
-| Sheet | Purpose |
-|-------|---------|
-| **Instructions** | Setup guide, Flow instructions |
-| **Labels** | Gmail labels with descriptions for AI |
-| **Queue** | Email processing queue |
-| **Config** | Settings (hidden) |
-| **Log** | Processing history |
-
-### Queue Columns
-
-| Column | Content |
-|--------|---------|
-| A | Email ID |
-| B | Subject |
-| C | From |
-| D | Date |
-| E | Labels to Apply (from AI) |
-| F | Status (Processing/Pending/Error) |
-| G | Processed At |
-| H | Context (full email for old emails) |
-
-### Hub Sheets
-
-| Sheet | Purpose |
-|-------|---------|
-| **Registry** | Registered user instances |
-| **Pending** | Requests waiting for AI |
-| **HubConfig** | Hub settings |
-| **HubLog** | Activity log |
-
----
-
-## Menu Options
-
-### User Instance Menu
-
-| Menu Item | Action |
-|-----------|--------|
-| Setup / Refresh | Initialize sheets and sync labels |
-| Sync Labels Now | Refresh Gmail labels list |
-| Queue Unlabeled Emails | Add unlabeled emails to queue |
-| Process All Pending | Manually process queued items |
-| Clear Queue | Clear the queue |
-
-### Hub Admin Menu
-
-| Menu Item | Action |
-|-----------|--------|
-| Run Initial Setup | Create Hub sheets |
-| Configure Chat Webhook | Set outbound webhook URL |
-| View Registered Users | Show all users |
-| Test Chat Connection | Send test message |
-| Test Route to User | Test webhook routing |
-
----
-
-## API Reference
-
-### User Webhook Endpoints
-
-**POST /** - Receive labels from Hub
-```json
-{
-  "action": "update_labels",
-  "emailId": "abc123",
-  "labels": "Work, Important"
-}
-```
-
-**GET /** - Status check
-
-### Hub Endpoints
-
-**POST / action=register** - Register user instance
-```json
-{
-  "action": "register",
-  "email": "user@example.com",
-  "instanceName": "myinstance",
-  "webhookUrl": "https://script.google.com/macros/s/.../exec"
-}
-```
-
-**POST / action=route_labels** - Route labels to user
-```json
-{
-  "action": "route_labels",
-  "instanceName": "myinstance",
-  "labels": "Work, Important",
-  "emailId": "abc123"
-}
-```
-
-**GET /** - Hub status
-
----
+Gmail itself is the queue. A hidden `_sorted` label marks conversations already handled, and a conversation is sorted again only when a new message arrives.
 
 ## Troubleshooting
 
-### Setup Issues
-
-| Problem | Solution |
-|---------|----------|
-| "command not found: npm" | Install Node.js first |
-| "command not found: clasp" | Run `npm install -g @google/clasp` |
-| "Project file already exists" | Delete `.clasp.json` in src/ or use option 2 |
-| Memory error | Run: `NODE_OPTIONS="--max-old-space-size=8192" clasp push` |
-| "invalid_grant" error | Run `clasp login` |
-| Menu not appearing | Refresh the spreadsheet page |
-| Permission denied (setup.sh) | Run `chmod +x setup.sh` |
-
-### Processing Issues
-
-| Problem | Solution |
-|---------|----------|
-| Queue not processing | Check if Labels column has values; check Status = "Processing" |
-| Multiple Processing rows stuck | Fixed in latest code - processes all ready rows |
-| Labels not appearing | Check Hub connection; verify webhook URL is registered |
-| Chat messages not sending | Verify chat_webhook_url in Config sheet |
-
-### Hub Issues
-
-| Problem | Solution |
-|---------|----------|
-| Users can't register | Check Hub is deployed with "Anyone" access |
-| Messages not routing | Check Registry sheet has user entry |
-| AI responses lost | Check Pending sheet; verify Chat app is receiving |
-| Webhook returns 404 | The user's deployment URL has changed — see "Fixing a Stale Webhook URL" below |
-
-### Fixing a Stale Webhook URL
-
-If the Hub logs show **HTTP 404** when sending to a user's webhook, the user's Apps Script deployment URL is out of date in the Registry. Follow these steps to find the correct URL and update it.
-
-**Step 1: Get the user's current deployment URL**
-
-1. Open the **user's** Apps Script project (Extensions > Apps Script from their spreadsheet)
-2. Click **Deploy > Manage deployments**
-3. Find the active **Web app** deployment
-4. Copy the **Web app URL** — it looks like:
-   `https://script.google.com/macros/s/AKfycb.../exec`
-
-**Step 2: Update the Hub Registry**
-
-1. Open the **Hub spreadsheet**
-2. Go to the **Registry** sheet
-3. Find the row for the affected user (match by instance name in column A)
-4. Replace the value in **column D** (`webhookUrl`) with the new URL from Step 1
-
-**Step 3: Verify**
-
-1. In the Hub's Apps Script editor, select **`retryPendingRegistrationWebhooks`** from the function dropdown and click **Run**
-2. Check the execution log — you should see a **200** response instead of 404
-
-### Fresh Start
-
-If you need to completely start over with local configuration:
-
-```bash
-./setup.sh --clean
-```
-
-This removes:
-- `src/.clasp.json` (user instance config)
-- `central-hub/.clasp.json` (hub config)
-- `central-hub/.hub_url` (saved hub URL)
-- `~/.clasp.json` (stray clasp config in home directory)
-
-**Note:** This does NOT delete your Google Sheets or Apps Script projects - only local configuration files.
-
-To also delete the local repository and re-clone:
-```bash
-cd ..
-rm -rf Email-sorter-for-Smart-Call-Time
-git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git
-cd Email-sorter-for-Smart-Call-Time
-./setup.sh
-```
-
-One-line full re-download (from your home folder):
-```bash
-cd ~ && rm -rf Email-sorter-for-Smart-Call-Time && git clone https://github.com/asa255-creator/Email-sorter-for-Smart-Call-Time.git && cd Email-sorter-for-Smart-Call-Time && ./setup.sh
-```
-
-If you see `Permission denied` or `Read-only file system`, you are likely in a protected directory (like `/` or `/Users`). Run the command above exactly as written so cloning happens in your home directory (`~`).
-
----
-
-## Code Architecture
-
-Both codebases follow atomic/modular design:
-
-### User Instance (src/)
-
-| Module | Responsibility |
-|--------|---------------|
-| Main.gs | Entry points, menu creation, trigger setup |
-| SheetSetup.gs | Create and configure sheets |
-| LabelManager.gs | Gmail label CRUD operations |
-| QueueProcessor.gs | Queue state machine, email processing |
-| OutboundNotification.gs | Send to Chat for AI processing |
-| InboundWebhook.gs | Receive labels from Hub |
-| ConfigManager.gs | Read/write configuration |
-| Logger.gs | Logging to sheet |
-
-### Central Hub (central-hub/)
-
-| Module | Responsibility |
-|--------|---------------|
-| HubMain.gs | Entry points (doPost, doGet, onMessage) |
-| HubConfig.gs | Configuration storage (single source of truth) |
-| UserRegistry.gs | User CRUD, lookup by instance name, space invites |
-| MessageRouter.gs | Parse AI responses, route to user webhooks |
-| PendingRequests.gs | Track requests, handle timeouts |
-| ChatManager.gs | Send messages to Chat space |
-| HubSetup.gs | Admin menu, initial setup |
-
----
+| Problem | Fix |
+|---|---|
+| Menu missing | Refresh the sheet |
+| Nothing leaves the inbox | Labels start as "Keep in inbox". Set Inbox actions on the Labels sheet. |
+| "No Claude API key" in Status | Settings → Set Claude API key |
+| A label is never used | Tick "Claude can choose it" and give it a description; run Sync labels from Gmail if you created it in Gmail |
+| Something was archived wrongly | Move it back to the inbox (it learns), or apply `Sorter/Always keep` |
+| The old inbox is untouched | Only the last `backfill_days` (14) are sorted. Raise it on the Config sheet for a one-time cleanup. |
+| Memory error during `clasp push` | `NODE_OPTIONS="--max-old-space-size=8192" clasp push` |
 
 ## Development
 
+The script is in `src/`. The tests in `tests/` run every `.gs` file in Node against fake versions of Gmail, Sheets and the Claude API. That includes full runs: upgrading a v1 sheet, GitHub rules, known contacts, sales sequences, learning from corrections, and scheduled archiving.
+
 ```bash
-# Push changes to user instance
+npm test
+```
+
+Push changes to your script with:
+
+```bash
 cd src && clasp push
-
-# Watch mode (auto-push on save)
-clasp push --watch
-
-# Pull changes from Apps Script
-clasp pull
 ```
-
-### Testing Webhooks
-
-Test user webhook:
-```bash
-curl -X POST "YOUR_WEBHOOK_URL" \
-  -H "Content-Type: application/json" \
-  -d '{"action":"ping"}'
-```
-
-Test Hub:
-```bash
-curl -X POST "HUB_URL" \
-  -H "Content-Type: application/json" \
-  -d '{"action":"ping"}'
-```
-
----
 
 ## License
 
