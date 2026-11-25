@@ -117,8 +117,10 @@ function buildClassifierSchema(labelNames) {
 /** The per-email message: facts first, then the cleaned-up body. */
 function buildEmailMessage(f, knownContact) {
   var yesNo = function(b) { return b ? 'yes' : 'no'; };
-  var lines = [
-    'From: ' + f.fromHeader,
+  var lines = ['From: ' + f.fromHeader];
+  if (f.relay) lines.push('Sent on behalf of: ' + (f.replyTo || 'unknown (relay address)'));
+  lines = lines.concat([
+    'Works at the same company as this person: ' + yesNo(f.sameCompany),
     'Has emailed this sender before: ' + yesNo(knownContact),
     'Has written in this conversation: ' + yesNo(f.youWroteInThread),
     'This person is in: ' + f.yourPosition + ' (' + f.recipientCount + ' recipient' +
@@ -134,7 +136,7 @@ function buildEmailMessage(f, knownContact) {
     '',
     'Latest message:',
     f.body || '(empty)'
-  ];
+  ]);
   return lines.join('\n');
 }
 

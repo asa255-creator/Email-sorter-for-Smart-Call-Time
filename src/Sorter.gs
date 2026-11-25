@@ -120,11 +120,12 @@ function learnFromLabel_(run, thread, teachLabel, keep) {
   var id = f.threadId;
   var current = userLabelOf(thread, [run.reviewLabel]);
   var when = formatDate_(new Date(run.now)).substring(0, 10);
-  var row = teachSender(run.senders, f.fromEmail, {
+  var who = f.senderEmail;
+  var row = teachSender(run.senders, who, {
     source: 'you',
     action: keep ? ACTIONS.KEEP : ACTIONS.ARCHIVE_READ,
-    label: current || (findSender(run.senders, f.fromEmail) || {}).label || '',
-    type: keep ? 'person' : ((run.senders.byKey[f.fromEmail] || {}).type || ''),
+    label: current || (findSender(run.senders, who) || {}).label || '',
+    type: keep ? 'person' : ((run.senders.byKey[who] || {}).type || ''),
     note: 'You chose ' + teachLabel.getName() + ' on ' + when + ': "' + f.subject.replace(/"/g, "'").substring(0, 100) + '"'
   }, run.now);
 
@@ -143,8 +144,8 @@ function learnFromLabel_(run, thread, teachLabel, keep) {
   run.stats.learned++;
 
   logEvent(run, 'Learned', row
-    ? (keep ? 'Mail from ' + f.fromEmail + ' will always stay in the inbox.'
-            : 'Mail from ' + f.fromEmail + ' will always be archived and marked read.')
+    ? (keep ? 'Mail from ' + who + ' will always stay in the inbox.'
+            : 'Mail from ' + who + ' will always be archived and marked read.')
     : 'Could not tell who sent this email, so nothing was learned.', id, f.subject);
 }
 
@@ -165,18 +166,19 @@ function learnFromRescue_(run, thread) {
   stateDelete(run.state, STATE_PREFIX.DUE, id);
   stateSet(run.state, STATE_PREFIX.SEEN, id, last);
   var f = buildThreadFeatures(thread, run.mineList, run.outreachSignals);
-  var row = run.senders.byKey[f.fromEmail];
+  var who = f.senderEmail;
+  var row = run.senders.byKey[who];
   var rule = matchRule(run.rules, f);
   var message;
   if (row && row.source === 'you') {
-    message = 'You moved this back to the inbox. Your own setting for ' + f.fromEmail +
+    message = 'You moved this back to the inbox. Your own setting for ' + who +
       ' on the Senders sheet was left as it is.';
   } else {
-    teachSender(run.senders, f.fromEmail, {
+    teachSender(run.senders, who, {
       source: 'rescued', action: ACTIONS.KEEP,
       note: 'You moved "' + f.subject.replace(/"/g, "'").substring(0, 100) + '" back to the inbox'
     }, run.now);
-    message = 'You moved this back to the inbox, so mail from ' + f.fromEmail + ' will stay in the inbox.';
+    message = 'You moved this back to the inbox, so mail from ' + who + ' will stay in the inbox.';
     if (rule) {
       message += ' It was archived by a rule (' + (rule.note || rule.field) + '); change it on the Rules sheet if that rule is wrong.';
     }
@@ -240,10 +242,13 @@ function sortThread_(run, thread, sortedBefore) {
     return null;
   }
 
-  var email = f.fromEmail;
+  var email = f.senderEmail;
   var knownContact = f.allFromYou ? true : isKnownContact(run.senders, email, run.mine, run.now);
+  // A relay address with no Reply-To (e.g. a Docs share) stands for many people: never learn it.
+  var learnable = !!email && !(f.relay && !f.replyTo);
+  var row = findSender(run.senders, email);
   var ctx = {
-    senderRow: findSender(run.senders, email),
+    senderRow: learnable || (row && row.source === 'you') ? row : null,
     known: protectionFor(f, knownContact),
     rule: matchRule(run.rules, f),
     labels: run.labels.map,
@@ -267,10 +272,8 @@ function sortThread_(run, thread, sortedBefore) {
     run.stats.claude++;
     run.stats.cost += answer.cost || 0;
     decision = decideFromClaude(ctx, answer.ai);
-    if (email) {
-      rememberClaudeDecision(run.senders, email, decision);
-      touchSender(run.senders, email, run.now);
-    }
+    if (learnable) rememberClaudeDecision(run.senders, email, decision);
+    if (email) touchSender(run.senders, email, run.now);
   }
 
   applyDecision_(run, thread, f, decision);
@@ -283,6 +286,7 @@ function protectionFor(f, knownContact) {
   if (f.allFromYou) return { strong: true, why: 'you sent it' };
   if (f.youWroteInThread) return { strong: true, why: 'you wrote in this conversation' };
   if (knownContact) return { strong: true, why: 'you have emailed this sender' };
+  if (f.sameCompany) return { strong: true, why: 'they are at your company' };
   return { strong: false, why: '' };
 }
 

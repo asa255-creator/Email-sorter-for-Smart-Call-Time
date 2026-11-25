@@ -76,10 +76,15 @@ function features(over) {
 
 test('default GitHub rules split notifications by reason', () => {
   const rules = S.parseRules(S.DEFAULT_RULES);
-  assert.equal(rules.length, 4);
-  const gh = (reason) => S.matchRule(rules, features({
-    fromHeader: 'GitHub <notifications@github.com>', headers: reason ? { 'x-github-reason': reason } : {}
+  assert.equal(rules.length, 5);
+  const gh = (reason, subject) => S.matchRule(rules, features({
+    fromHeader: '"Org" <notifications@github.com>', subject: subject || '[org/repo] Something',
+    ccHeader: reason ? '"Reason" <' + reason + '@noreply.github.com>' : ''
   }));
+  const failed = gh('ci_activity', '[org/repo] Run failed: Integration Tests');
+  assert.equal(failed.action, S.ACTIONS.ARCHIVE_LATER, 'failed runs stay visible for a day');
+  assert.equal(failed.days, 1);
+  assert.equal(gh('ci_activity', '[org/repo] Run succeeded: Deploy Dev').action, S.ACTIONS.ARCHIVE_READ);
   assert.equal(gh('review_requested').action, S.ACTIONS.KEEP);
   assert.equal(gh('mention').action, S.ACTIONS.KEEP);
   assert.equal(gh('ci_activity').action, S.ACTIONS.ARCHIVE_READ);

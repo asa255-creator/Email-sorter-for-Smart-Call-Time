@@ -15,7 +15,9 @@ Each new conversation goes through these steps. The first one with an answer win
 | 3. Memory | Senders it has learned, or that you accepted from Suggestions | free |
 | 4. Claude | Everything else. Claude picks one of your labels, says what kind of sender it is, and how sure it is. | ~$0.005 per email on Sonnet 5.5 |
 
-There is one rule on top of those steps: **mail from people you know is never archived.** That means anyone you have emailed, any conversation you wrote in, and anything you sent. Only your own explicit choice (step 1) can override it.
+There is one rule on top of those steps: **mail from people you know is never archived.** That means anyone you have emailed, anyone at your own company's domain, any conversation you wrote in, and anything you sent. Only your own explicit choice (step 1) can override it.
+
+Shared-document and similar notifications ("Jane (via Google Docs)") come from one Google address no matter who sent them, so the sorter judges them by the person in Reply-To and never learns the Google address as a sender.
 
 Claude puts every sender into one of four types:
 
@@ -37,14 +39,15 @@ Two things keep an email in the inbox whatever its label says: Claude marks it a
 
 ### GitHub
 
-The Rules sheet starts with four rules based on GitHub's `X-GitHub-Reason` header:
+The Rules sheet starts with five rules based on the reason address GitHub puts in Cc (for example `ci_activity@noreply.github.com`):
 
-| Reason | What happens |
+| Notification | What happens |
 |---|---|
-| `review_requested`, `mention`, `team_mention`, `assign`, `security_alert` | Kept in the inbox |
-| `ci_activity`, `push`, `subscribed`, `state_change`, `your_activity` | Archived and marked read |
-| `comment`, `author`, `manual` | Kept for 2 days, then archived |
-| anything else from `notifications@github.com` | Kept for 2 days, then archived |
+| A failed Actions run (`[org/repo] Run failed: …`) | Kept for a day, then archived |
+| Review requested, @mention, team mention, assigned, security alert | Kept in the inbox |
+| Successful CI runs, pushes, threads you only watch, merges/closes | Archived and marked read |
+| Comments on your PRs and issues | Kept for 2 days, then archived |
+| Anything else from `notifications@github.com` | Kept for 2 days, then archived |
 
 If you reply to one, its scheduled archive is cancelled. To cut volume at the source, open GitHub → Settings → Notifications, set Actions emails to "only failed workflows", and unwatch repos you don't need.
 

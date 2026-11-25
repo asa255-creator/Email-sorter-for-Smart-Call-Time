@@ -50,6 +50,32 @@ function isAutomatedAddress(email) {
   return AUTOMATED_LOCAL_PART.test(local);
 }
 
+// Addresses that send on behalf of many different people (Google Docs shares,
+// calendar invites, comment notifications). Their From address says nothing
+// about who wrote the email, so the sorter never learns them as a sender.
+var RELAY_ADDRESSES = [
+  'drive-shares-dm-noreply@google.com', 'drive-shares-noreply@google.com',
+  'comments-noreply@docs.google.com', 'calendar-notification@google.com'
+];
+
+/** True for "Jane Doe (via Google Docs)" style senders. */
+function isRelaySender(name, email) {
+  return /\(via [^)]+\)/i.test(String(name || '')) || RELAY_ADDRESSES.indexOf(String(email || '').toLowerCase()) >= 0;
+}
+
+var FREE_MAIL_DOMAINS = ['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+  'yahoo.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'gmx.com', 'hey.com'];
+
+/** Your company domains: the domains of your own addresses, minus free email providers. */
+function workDomains(myAddresses) {
+  var out = [];
+  (myAddresses || []).forEach(function(a) {
+    var d = domainOf(a);
+    if (d && FREE_MAIL_DOMAINS.indexOf(d) < 0 && out.indexOf(d) < 0) out.push(d);
+  });
+  return out;
+}
+
 // ============================================================================
 // BODY CLEAN-UP
 // ============================================================================
@@ -188,6 +214,12 @@ function buildThreadFeatures(thread, myAddresses, outreachSignals) {
   };
 
   var from = parseAddress(latest.getFrom());
+  var replyTo = '';
+  try { replyTo = parseAddress(latest.getReplyTo() || '').email; } catch (e) { replyTo = ''; }
+  var relay = isRelaySender(from.name, from.email);
+  // For "Jane (via Google Docs)" style mail, the person is in Reply-To.
+  var senderEmail = relay && replyTo ? replyTo : from.email;
+  var senderDomain = domainOf(senderEmail);
   var toHeader = latest.getTo() || '';
   var ccHeader = latest.getCc() || '';
   var toList = extractEmails(toHeader);
@@ -210,6 +242,11 @@ function buildThreadFeatures(thread, myAddresses, outreachSignals) {
     fromName: from.name,
     fromEmail: from.email,
     fromDomain: domainOf(from.email),
+    replyTo: replyTo,
+    relay: relay,
+    // Who the sorter treats as the sender: memory, known-contact checks and teaching use this.
+    senderEmail: senderEmail,
+    sameCompany: !isAutomatedAddress(senderEmail) && workDomains(myAddresses).indexOf(senderDomain) >= 0,
     toHeader: toHeader,
     ccHeader: ccHeader,
     recipientCount: toList.length + ccList.length,

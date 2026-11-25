@@ -175,13 +175,14 @@ class FakeLabel {
 
 class FakeMessage {
   constructor(o) {
-    this.o = Object.assign({ to: '', cc: '', bcc: '', subject: '(no subject)', plain: '', html: '', headers: {} }, o);
+    this.o = Object.assign({ to: '', cc: '', bcc: '', replyTo: '', subject: '(no subject)', plain: '', html: '', headers: {} }, o);
     this.o.headers = Object.fromEntries(Object.entries(this.o.headers).map(([k, v]) => [k.toLowerCase(), v]));
   }
   getFrom() { return this.o.from; }
   getTo() { return this.o.to; }
   getCc() { return this.o.cc; }
   getBcc() { return this.o.bcc; }
+  getReplyTo() { return this.o.replyTo; }
   getSubject() { return this.o.subject; }
   getDate() { return this.o.date; }
   getPlainBody() { return this.o.plain; }

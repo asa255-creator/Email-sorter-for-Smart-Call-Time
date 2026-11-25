@@ -80,7 +80,7 @@ test('upgrade keeps your data, moves the key, switches to Sonnet 5.5 and drops t
   assert.equal(byName['Needs Review'][4], false, 'the review label is no longer offered to Claude (v1 bug)');
   assert.equal(ss.getSheetByName('Queue'), null);
   assert.equal(ss.getSheetByName('Instructions'), null);
-  assert.equal(S.readRules().length, 4);
+  assert.equal(S.readRules().length, 5);
   assert.deepEqual(JSON.parse(JSON.stringify(S.readLabels().aiList.map((l) => l.name))), ['Clients', 'Newsletters']);
 });
 
@@ -108,10 +108,12 @@ test('a full run sorts GitHub, people, sales sequences and newsletters correctly
   setLabelAction(ss, 'Newsletters', 'Archive');
 
   const gh = (id, reason, subject) => gmail.addThread(id, [{
-    from: 'GitHub <notifications@github.com>', to: ME, subject, date: ago(HOUR),
-    headers: { 'X-GitHub-Reason': reason, 'List-Id': 'repo <repo.owner.github.com>' }, plain: 'GitHub says hi'
+    from: '"Org" <notifications@github.com>', to: '"org/repo" <repo@noreply.github.com>',
+    cc: '"Reason" <' + reason + '@noreply.github.com>', subject, date: ago(HOUR),
+    headers: { 'List-Id': 'repo <repo.owner.github.com>' }, plain: 'GitHub says hi'
   }]);
-  gh('gh-ci', 'ci_activity', '[repo] Run failed: CI');
+  gh('gh-ci', 'ci_activity', '[org/repo] Run succeeded: Deploy Dev');
+  gh('gh-failed', 'ci_activity', '[org/repo] Run failed: Integration Tests');
   gh('gh-review', 'review_requested', '[repo] Please review #12');
   gh('gh-comment', 'comment', 'Re: [repo] Fix bug (#13)');
   // You have emailed this client before.
@@ -135,6 +137,7 @@ test('a full run sorts GitHub, people, sales sequences and newsletters correctly
   assert.ok(gmail.thread('gh-ci').labels.has('Sorter/Archived'));
   assert.equal(gmail.thread('gh-review').inbox, true);
   assert.equal(gmail.thread('gh-comment').inbox, true, 'comment stays for 2 days');
+  assert.equal(gmail.thread('gh-failed').inbox, true, 'a failed run stays visible for a day');
   assert.ok(claudeCalls.every((c) => !/github/.test(c.email)), 'GitHub never goes to Claude');
 
   // Known contact: kept no matter what Claude said, and not branded cold outreach.
@@ -168,7 +171,7 @@ test('a full run sorts GitHub, people, sales sequences and newsletters correctly
   assert.equal(claudeCalls[0].payload.output_config.format.type, 'json_schema');
   assert.equal(claudeCalls[0].headers['x-api-key'], 'sk-ant-old-key');
   assert.equal(stats.claude, 4);
-  assert.equal(stats.rules, 3);
+  assert.equal(stats.rules, 4);
 
   // Sender memory and log.
   const senders = senderRows(ss);
@@ -176,7 +179,7 @@ test('a full run sorts GitHub, people, sales sequences and newsletters correctly
   assert.equal(senders['jordan@growthly.io'][1], 'Cold Outreach');
   assert.equal(senders['jordan@growthly.io'][6], 'claude');
   const log = ss.getSheetByName('Log').data(7);
-  assert.equal(log.length, 7);
+  assert.equal(log.length, 8);
   const salesLog = log.find((r) => r[2] === 'Quick question');
   assert.equal(salesLog[3], 'Claude');
   assert.equal(salesLog[5], 'Archived + read');
@@ -267,13 +270,13 @@ test('"archive after days" conversations leave the inbox when due, unless you re
   const w = upgradedWorld(() => claudeOk({}));
   const { ctx: S, gmail, scriptProps } = w;
   gmail.addThread('due', [{ from: 'GitHub <notifications@github.com>', to: ME, subject: 'Re: PR', date: ago(3 * DAY),
-    headers: { 'X-GitHub-Reason': 'comment' } }], { labels: ['GitHub', '_sorted'] });
+    cc: 'comment@noreply.github.com' }], { labels: ['GitHub', '_sorted'] });
   scriptProps.setProperty('d:due', S.encodeTime(Date.now() - HOUR));
   scriptProps.setProperty('s:due', S.encodeTime(Date.now() - 3 * DAY));
 
   // A fresh GitHub comment gets scheduled; then you reply, which cancels it.
   gmail.addThread('talk', [{ from: 'GitHub <notifications@github.com>', to: ME, subject: 'Re: Issue', date: ago(HOUR),
-    headers: { 'X-GitHub-Reason': 'author' } }]);
+    cc: 'Author <author@noreply.github.com>' }]);
   S.runSorter();
   assert.equal(gmail.thread('due').inbox, false, 'due conversation archived');
   assert.equal(gmail.thread('talk').inbox, true);
@@ -292,7 +295,7 @@ test('when Claude is unavailable, rules keep working and the error is logged onc
   gmail.addThread('a', [{ from: 'x@one.com', to: ME, subject: 'One', date: ago(HOUR) }]);
   gmail.addThread('b', [{ from: 'y@two.com', to: ME, subject: 'Two', date: ago(2 * HOUR) }]);
   gmail.addThread('ci', [{ from: 'GitHub <notifications@github.com>', to: ME, subject: 'CI', date: ago(3 * HOUR),
-    headers: { 'X-GitHub-Reason': 'ci_activity' } }]);
+    cc: 'ci_activity@noreply.github.com' }]);
 
   S.runSorter();
   S.runSorter();
@@ -326,4 +329,35 @@ test('suggestions are parsed from the sheet and applied as labels and senders', 
   const senders = senderRows(ss);
   assert.equal(senders['ship@store.com'][6], 'suggested');
   assert.equal(senders['x@y.com'], undefined, 'unknown labels are skipped');
+});
+
+test('Docs shares are judged by who shared them; colleagues at your domain are never archived', () => {
+  const seen = [];
+  const w = upgradedWorld((payload) => {
+    seen.push(payload.messages[0].content);
+    return claudeOk({ reason: 'Automated notice.', sender_type: 'automated', label: 'Newsletters',
+      needs_attention: false, confidence: 'high' });
+  });
+  const { ss, ctx: S, gmail } = w;
+  setLabelAction(ss, 'Newsletters', 'Archive');
+  const share = (id, who) => gmail.addThread(id, [{
+    from: '"' + who + ' (via Google Docs)" <drive-shares-dm-noreply@google.com>', replyTo: who + ' <' + who.toLowerCase() + '@partner.org>',
+    to: ME, subject: 'Document shared with you: "Plan ' + id + '"', date: ago(HOUR), plain: 'I\'ve shared an item with you.'
+  }]);
+  // Five shares from five different people: the relay address must never become a learned sender.
+  ['A', 'B', 'C', 'D', 'E'].forEach((x) => { share('share' + x, 'Person' + x); S.runSorter(); });
+  const senders = senderRows(ss);
+  assert.equal(senders['drive-shares-dm-noreply@google.com'], undefined, 'relay address not learned');
+  assert.ok(senders['persona@partner.org'], 'the person who shared is the sender');
+  assert.match(seen[0], /Sent on behalf of: persona@partner.org/);
+  assert.equal(seen.length, 5, 'each share went to Claude, none skipped via memory of the relay');
+
+  // A colleague at your own (non-free-mail) domain, never emailed before.
+  w.scriptProps.setProperty('status_my_addresses', 'me@mycompany.com');
+  w.scriptProps.setProperty('status_my_addresses_at', String(Date.now()));
+  gmail.addThread('colleague', [{ from: 'Sam <sam@mycompany.com>', to: 'me@mycompany.com',
+    subject: 'Q3 plan', date: ago(10 * 60000), plain: 'Thoughts?' }]);
+  S.runSorter();
+  assert.equal(gmail.thread('colleague').inbox, true);
+  assert.match(ss.getSheetByName('Log').data(7)[0][6], /they are at your company/);
 });
