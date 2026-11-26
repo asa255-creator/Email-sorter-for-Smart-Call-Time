@@ -141,6 +141,7 @@ class FakeSpreadsheet {
   getSheets() { return this.sheets.slice(); }
   setActiveSheet(s) { this.active = s; return s; }
   getName() { return 'Test spreadsheet'; }
+  toast() {}
 }
 
 function makeUi(answers) {

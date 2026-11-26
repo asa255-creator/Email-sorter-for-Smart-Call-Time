@@ -40,6 +40,8 @@ function runSorter_(opts) {
     }
     run = startRun_(state, now);
     run.problem = run.claudeBlocked;
+    if (opts.timeLimitMs) run.timeLimit = opts.timeLimitMs;
+    if (opts.markReadBatches) run.markReadBatches = opts.markReadBatches;
     processCorrections_(run, work);
     processInbox_(run, work.inbox);
     if (sweepDue) {
@@ -57,6 +59,7 @@ function runSorter_(opts) {
     if (run) finishRun_(run);
     lock.releaseLock();
   }
+  if (run) run.stats.moreToDo = !!run.ranOut || run.stats.sorted >= getConfigNumber('max_threads_per_run');
   return run ? run.stats : {};
 }
 
@@ -105,7 +108,9 @@ function finishRun_(run) {
 }
 
 function timeLeft_(run) {
-  return Date.now() - run.started < RUN_TIME_LIMIT_MS;
+  var ok = Date.now() - run.started < (run.timeLimit || RUN_TIME_LIMIT_MS);
+  if (!ok) run.ranOut = true;
+  return ok;
 }
 
 // ============================================================================
@@ -481,7 +486,7 @@ function markOldUnreadRead(run) {
   var query = 'is:unread older_than:' + days + 'd -in:spam -in:trash -in:chats';
   var marked = 0;
   var start = 0;
-  for (var batch = 0; batch < 10 && timeLeft_(run); batch++) {
+  for (var batch = 0; batch < (run.markReadBatches || 10) && timeLeft_(run); batch++) {
     var threads = GmailApp.search(query, start, 100);
     if (!threads.length) break;
     var old = threads.filter(function(t) { return t.getLastMessageDate().getTime() < cutoff; });

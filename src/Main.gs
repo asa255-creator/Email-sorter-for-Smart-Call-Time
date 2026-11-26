@@ -149,7 +149,10 @@ function isScheduled_() {
 
 function sortNowFromMenu() {
   var ui = SpreadsheetApp.getUi();
-  var stats = runSorter_({ forceSweep: true });
+  SpreadsheetApp.getActive().toast('Sorting your inbox. The first run works through a backlog and can take a few ' +
+    'minutes; you can keep using Gmail meanwhile.', 'Email Sorter', 30);
+  // Shorter than a background run, so the dialog comes back sooner; the trigger carries on with the rest.
+  var stats = runSorter_({ forceSweep: true, timeLimitMs: 3 * 60 * 1000, markReadBatches: 3 });
   if (stats.busy) {
     ui.alert('Already sorting', 'A run is in progress. Try again in a minute.', ui.ButtonSet.OK);
     return;
@@ -160,6 +163,9 @@ function sortNowFromMenu() {
     (stats.rules || 0) + ' by rules, ' + (stats.memory || 0) + ' from memory, ' + (stats.claude || 0) + ' by Claude.\n' +
     'Archived ' + (stats.archived || 0) + '. Learned from ' + (stats.learned || 0) + ' of your corrections.' +
     (stats.labelsCreated ? ' Created ' + stats.labelsCreated + ' new label' + (stats.labelsCreated === 1 ? '' : 's') + '.' : '') +
+    (stats.markedRead ? '\nMarked ' + stats.markedRead + ' old unread conversation' + (stats.markedRead === 1 ? '' : 's') + ' read.' : '') +
+    (stats.moreToDo ? '\n\nThere is more to do; it carries on automatically every ' + runInterval_() + ' minute' +
+      (runInterval_() === 1 ? '' : 's') + '.' : '') +
     (problem ? '\n\nProblem: ' + problem : '') + '\n\nDetails are on the Log sheet.', ui.ButtonSet.OK);
 }
 
