@@ -9,8 +9,46 @@
  * an address such as ci_activity@noreply.github.com.
  */
 
-var RULES_HEADER = ['On', 'If this field', 'contains (use | for "or")', 'Label', 'Inbox action',
+var RULES_HEADER = ['On', 'If this field', 'contains (use | for "or")', 'Labels (use | for several)', 'Inbox action',
   'Archive after (days)', 'Note'];
+
+// ============================================================================
+// LABEL LISTS
+// An email can carry several labels. Where a sheet holds several in one cell
+// (Rules, Senders, Corrections) they are separated by " | ".
+// ============================================================================
+
+function splitLabels(text) {
+  var out = [];
+  String(text || '').split('|').forEach(function(p) {
+    var n = p.trim();
+    if (n && out.map(lower_).indexOf(n.toLowerCase()) < 0) out.push(n);
+  });
+  return out;
+}
+
+function joinLabels(names) {
+  return (names || []).join(' | ');
+}
+
+function lower_(s) {
+  return String(s).toLowerCase();
+}
+
+/** Drops labels that are only parents of another label in the list: [Work, Work/Tech] -> [Work/Tech]. */
+function leafLabels(names) {
+  var list = splitLabels(joinLabels(names));
+  return list.filter(function(n) {
+    var prefix = n.toLowerCase() + '/';
+    return !list.some(function(m) { return m.toLowerCase().indexOf(prefix) === 0; });
+  });
+}
+
+function sameLabels(a, b) {
+  var x = (a || []).map(lower_).sort();
+  var y = (b || []).map(lower_).sort();
+  return x.length === y.length && x.every(function(v, i) { return v === y[i]; });
+}
 
 // The label "Warnings" is replaced at setup by your own warnings label if you have one.
 var WARNINGS_PLACEHOLDER = 'Warnings';
@@ -60,7 +98,7 @@ function parseRules(rows) {
       row: i + 2,
       field: field,
       patterns: patterns,
-      label: String(r[3] || '').trim(),
+      labels: splitLabels(r[3]),
       action: normalizeAction(r[4]),
       days: isNaN(days) ? null : days,
       note: String(r[6] || '').trim()

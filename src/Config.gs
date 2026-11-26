@@ -183,7 +183,7 @@ function setApiKey(key) {
 // s:<threadId> -> when the conversation was last sorted (its last message time)
 // a:<threadId> -> when the sorter archived it (to tell your rescues from replies)
 // d:<threadId> -> when an "Archive after days" conversation is due to be archived
-// l:<threadId> -> the label the sorter chose, so a label you change in Gmail can be learned from
+// l:<threadId> -> the labels on the conversation after sorting, so labels you change in Gmail can be learned from
 //
 // Times are stored as base-36 epoch seconds to stay well inside the 500 KB
 // property quota.
@@ -210,8 +210,12 @@ function loadState() {
   Object.keys(all).forEach(function(key) {
     var id = key.substring(2);
     if (key.indexOf(STATE_PREFIX.LABELED) === 0) {
-      var parts = String(all[key]).split('|');
-      state.labeled[id] = { at: decodeTime(parts[0]), type: parts[1] || '', label: parts.slice(2).join('|') };
+      try {
+        var v = JSON.parse(all[key]);
+        state.labeled[id] = { at: decodeTime(v.t), type: v.y || '', labels: v.l || [] };
+      } catch (e) {
+        state.deletes[key] = true; // unreadable entry from an older version
+      }
     } else if (key.indexOf(STATE_PREFIX.SEEN) === 0) state.seen[id] = decodeTime(all[key]);
     else if (key.indexOf(STATE_PREFIX.ARCHIVED) === 0) state.archived[id] = decodeTime(all[key]);
     else if (key.indexOf(STATE_PREFIX.DUE) === 0) state.due[id] = decodeTime(all[key]);
@@ -227,10 +231,10 @@ function stateBucket_(state, prefix) {
   return state.due;
 }
 
-/** Remembers which label the sorter chose (and why) so a later change by you can be learned from. */
-function stateSetLabeled(state, threadId, at, type, label) {
-  state.labeled[threadId] = { at: at, type: type || '', label: label };
-  state.changes[STATE_PREFIX.LABELED + threadId] = encodeTime(at) + '|' + (type || '') + '|' + label;
+/** Remembers the labels a conversation had right after sorting, so a later change by you can be learned from. */
+function stateSetLabeled(state, threadId, at, type, labels) {
+  state.labeled[threadId] = { at: at, type: type || '', labels: labels.slice() };
+  state.changes[STATE_PREFIX.LABELED + threadId] = JSON.stringify({ t: encodeTime(at), y: type || '', l: labels });
   delete state.deletes[STATE_PREFIX.LABELED + threadId];
 }
 

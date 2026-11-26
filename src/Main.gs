@@ -259,7 +259,7 @@ function testClaudeFromMenu() {
     ui.alert('Claude is working',
       'Model: ' + (answer.model || getConfig('claude_model')) + '\n' +
       'Test email (a HubSpot-style sales pitch) was read as: ' + answer.ai.sender_type +
-      ', label ' + answer.ai.label + ', confidence ' + answer.ai.confidence + '.\n' +
+      ', labels ' + (answer.ai.labels.join(', ') || 'none') + ', confidence ' + answer.ai.confidence + '.\n' +
       'Reason: ' + answer.ai.reason + '\n\nCost: about $' + (answer.cost || 0).toFixed(4),
       ui.ButtonSet.OK);
   } catch (e) {

@@ -168,13 +168,13 @@ function processCorrections_(run, work) {
 function learnFromLabel_(run, thread, teachLabel, keep) {
   var f = buildThreadFeatures(thread, run.mineList, run.outreachSignals);
   var id = f.threadId;
-  var current = userLabelOf(thread, [run.reviewLabel]);
+  var current = leafLabels(userLabelsOf(thread, [run.reviewLabel]));
   var when = formatDate_(new Date(run.now)).substring(0, 10);
   var who = f.senderEmail;
   var row = teachSender(run.senders, who, {
     source: 'you',
     action: keep ? ACTIONS.KEEP : ACTIONS.ARCHIVE_READ,
-    label: current || (findSender(run.senders, who) || {}).label || '',
+    labels: current.length ? current : ((findSender(run.senders, who) || {}).labels || []),
     type: keep ? 'person' : ((run.senders.byKey[who] || {}).type || ''),
     note: 'You chose ' + teachLabel.getName() + ' on ' + when + ': "' + f.subject.replace(/"/g, "'").substring(0, 100) + '"'
   }, run.now);
@@ -305,7 +305,7 @@ function sortThread_(run, thread, sortedBefore) {
   }
 
   applyDecision_(run, thread, f, decision);
-  watchLabel(run, f, decision);
+  watchLabel(run, thread, f, decision);
   logDecision(run, f, decision);
   if (answer && answer.ai.new_label) considerLabelIdea(run, answer.ai, f);
   return decision;
@@ -336,7 +336,7 @@ function getPrompt_(run) {
 
 function applyDecision_(run, thread, f, d) {
   var id = f.threadId;
-  var names = d.label ? expandLabelAncestors([d.label]) : [];
+  var names = expandLabelAncestors(d.labels || []);
   if (d.review && run.reviewLabel) names.push(run.reviewLabel);
   names.forEach(function(n) { thread.addLabel(ensureLabel(n)); });
   thread.addLabel(ensureLabel(SORTER_LABELS.SORTED, 'all'));

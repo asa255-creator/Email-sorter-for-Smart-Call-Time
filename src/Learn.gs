@@ -129,27 +129,33 @@ function createLabelFromIdea_(run, idea) {
 // LABELS YOU CHANGE IN GMAIL
 // ============================================================================
 
-/** Remembers the label the sorter chose so a later change can be noticed. */
-function watchLabel(run, f, decision) {
-  if (!decision.label || (decision.by !== 'claude' && decision.by !== 'memory')) return;
-  stateSetLabeled(run.state, f.threadId, run.now, decision.type || '', decision.label);
+/** Remembers the labels on a conversation right after sorting, so a later change can be noticed. */
+function watchLabel(run, thread, f, decision) {
+  if (!(decision.labels || []).length || (decision.by !== 'claude' && decision.by !== 'memory')) return;
+  var now = userLabelsOf(thread, [run.reviewLabel]);
+  stateSetLabeled(run.state, f.threadId, run.now, decision.type || '', now);
 }
 
 /**
- * Pure: the label you moved a conversation to, or '' when you didn't change it.
- * Ancestors of the sorter's label (e.g. "Work" for "Work/Tech") and the
- * sorter's own labels don't count as your choice.
+ * Pure: what you changed about a conversation's labels, or null.
+ *
+ * @param {string[]} before  your labels right after the sorter labelled it
+ * @param {string[]} now     your labels now
+ * @returns {{ was: string[], now: string[] }|null} the specific labels before and
+ *   after. Parent labels left behind when you remove a sub-label don't count
+ *   as a choice, and removing labels without adding any is not treated as a
+ *   correction (it is often just tidying up).
  */
-function findRelabel(labelNames, sorterLabel, ignore) {
-  var lower = labelNames.map(function(n) { return String(n).toLowerCase(); });
-  var chosen = String(sorterLabel || '').toLowerCase();
-  if (!chosen || lower.indexOf(chosen) >= 0) return '';
-  var skip = (ignore || []).map(function(n) { return String(n).toLowerCase(); });
-  var candidates = labelNames.filter(function(n) {
-    var l = String(n).toLowerCase();
-    return isUserLabelName(n) && skip.indexOf(l) < 0 && chosen.indexOf(l + '/') !== 0;
-  }).sort(function(a, b) { return b.split('/').length - a.split('/').length; });
-  return candidates[0] || '';
+function labelChange(before, now) {
+  if (sameLabels(before, now)) return null;
+  var beforeLower = before.map(lower_);
+  var nowLower = now.map(lower_);
+  var added = now.filter(function(n) { return beforeLower.indexOf(n.toLowerCase()) < 0; });
+  if (!added.length) return null;
+  var kept = leafLabels(before).filter(function(n) { return nowLower.indexOf(n.toLowerCase()) >= 0; });
+  var result = leafLabels(kept.concat(added));
+  var was = leafLabels(before);
+  return sameLabels(result, was) ? null : { was: was, now: result };
 }
 
 /** Checks recently sorted conversations for labels you changed. Runs with the hourly sweep. */
@@ -164,34 +170,35 @@ function checkRelabels(run) {
     var thread = null;
     try { thread = GmailApp.getThreadById(id); } catch (e) { thread = null; }
     if (!thread) { stateDelete(run.state, STATE_PREFIX.LABELED, id); return; }
-    var names = thread.getLabels().map(function(l) { return l.getName(); });
-    var yours = findRelabel(names, entry.label, [run.reviewLabel, run.outreachLabel]);
-    var stillThere = names.some(function(n) { return n.toLowerCase() === entry.label.toLowerCase(); });
-    if (stillThere) return;                       // unchanged: keep watching
+    var change = labelChange(entry.labels, userLabelsOf(thread, [run.reviewLabel]));
+    if (!change) return;                          // unchanged: keep watching
     stateDelete(run.state, STATE_PREFIX.LABELED, id);
-    if (yours) learnRelabel_(run, thread, entry, yours);
+    learnRelabel_(run, thread, entry, change);
   });
 }
 
-function learnRelabel_(run, thread, entry, yours) {
+function learnRelabel_(run, thread, entry, change) {
   var f = buildThreadFeatures(thread, run.mineList, run.outreachSignals);
   var who = f.senderEmail;
   var learnable = !!who && !(f.relay && !f.replyTo);
-  run.relabels.push([new Date(run.now), who, f.subject, entry.label, yours]);
-  var note = 'You moved "' + f.subject.replace(/"/g, "'").substring(0, 80) + '" from ' + entry.label + ' to ' + yours;
+  var was = joinLabels(change.was) || 'no label';
+  var now = joinLabels(change.now);
+  run.relabels.push([new Date(run.now), who, f.subject, joinLabels(change.was), now]);
+  var note = 'You changed "' + f.subject.replace(/"/g, "'").substring(0, 80) + '" from ' + was + ' to ' + now;
+  var wasOutreach = change.was.some(function(n) { return n.toLowerCase() === run.outreachLabel.toLowerCase(); });
   var message;
 
-  if (learnable && (entry.type === 'automated' || entry.type === 'bulk')) {
-    teachSender(run.senders, who, { source: 'you', label: yours, action: '', note: note }, run.now);
-    message = 'You moved this from ' + entry.label + ' to ' + yours + '. Mail from ' + who +
-      ' will be filed under ' + yours + ' from now on.';
-  } else if (learnable && entry.type === 'cold_outreach') {
-    teachSender(run.senders, who, { source: 'rescued', action: ACTIONS.KEEP, label: '', note: note }, run.now);
-    message = 'You moved this out of ' + entry.label + ', so ' + who + ' is no longer treated as a sales email ' +
-      'and stays in the inbox. Claude will also see this as an example.';
+  if (learnable && wasOutreach) {
+    teachSender(run.senders, who, { source: 'rescued', action: ACTIONS.KEEP, labels: [], note: note }, run.now);
+    message = 'You moved this out of ' + run.outreachLabel + ', so ' + who + ' is no longer treated as a sales ' +
+      'email and stays in the inbox. Claude will also see this as an example.';
+  } else if (learnable && (entry.type === 'automated' || entry.type === 'bulk')) {
+    teachSender(run.senders, who, { source: 'you', labels: change.now, action: '', note: note }, run.now);
+    message = 'You changed this from ' + was + ' to ' + now + '. Mail from ' + who + ' will get ' + now +
+      ' from now on.';
   } else {
-    message = 'You moved this from ' + entry.label + ' to ' + yours + '. Claude will use it as an example ' +
-      'for similar email (people\'s mail is not locked to one label).';
+    message = 'You changed this from ' + was + ' to ' + now + '. Claude will use it as an example for ' +
+      'similar email (people\'s mail is not locked to fixed labels).';
   }
   run.stats.learned++;
   logEvent(run, 'Learned', message, f.threadId, f.subject);

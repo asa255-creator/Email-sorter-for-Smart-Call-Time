@@ -34,10 +34,10 @@ var DEFAULT_ARCHIVE_DAYS = 3;
 function decideWithoutClaude(ctx) {
   var row = ctx.senderRow;
 
-  if (row && row.source === 'you' && (row.action || row.label)) {
+  if (row && row.source === 'you' && (row.action || row.labels.length)) {
     return finishDecision_({
       by: 'you',
-      label: row.label,
+      labels: row.labels,
       action: row.action,
       days: null,
       type: row.type,
@@ -48,7 +48,7 @@ function decideWithoutClaude(ctx) {
   if (ctx.rule) {
     return finishDecision_({
       by: 'rule',
-      label: ctx.rule.label,
+      labels: ctx.rule.labels,
       action: ctx.rule.action,
       days: ctx.rule.days,
       type: '',
@@ -59,7 +59,7 @@ function decideWithoutClaude(ctx) {
   if (isTrustedSender(row, ctx.learnAfter)) {
     return finishDecision_({
       by: 'memory',
-      label: row.label,
+      labels: row.labels,
       action: row.action,
       days: null,
       type: row.type,
@@ -76,18 +76,18 @@ function decideWithoutClaude(ctx) {
  * Turns Claude's answer into a decision.
  *
  * @param {Object} ctx  as for decideWithoutClaude, plus outreachLabel and reviewLabel
- * @param {Object} ai   { sender_type, label, needs_attention, confidence, reason }
+ * @param {Object} ai   { sender_type, labels, needs_attention, confidence, reason }
  */
 function decideFromClaude(ctx, ai) {
   var type = ai.sender_type;
-  var label = ai.label === 'NONE' ? '' : ai.label;
+  var labels = (ai.labels || []).slice();
   var strong = ctx.known && ctx.known.strong;
 
-  if (type === 'cold_outreach' && !strong) label = ctx.outreachLabel;
+  if (type === 'cold_outreach' && !strong) labels = [ctx.outreachLabel];
 
   var decision = {
     by: 'claude',
-    label: label,
+    labels: labels,
     action: '',
     days: null,
     type: type,
@@ -115,7 +115,7 @@ function decideFromClaude(ctx, ai) {
 
 /** A learned sender can be sorted without Claude. */
 function isTrustedSender(row, learnAfter) {
-  if (!row || (!row.action && !row.label)) return false;
+  if (!row || (!row.action && !row.labels.length)) return false;
   if (TRUSTED_SOURCES.indexOf(row.source) >= 0) return true;
   if (row.source === 'claude') {
     return row.agreed >= learnAfter && LEARNABLE_TYPES.indexOf(row.type) >= 0;
@@ -123,18 +123,40 @@ function isTrustedSender(row, learnAfter) {
   return false;
 }
 
-/** Fills in action and days from the label's settings when not given. */
+/**
+ * Fills in action and days from the labels' settings when not given. With
+ * several labels the most careful action wins: the email only leaves the
+ * inbox if every one of its labels says so.
+ */
 function resolveAction_(decision, labels) {
-  var info = decision.label ? labels[decision.label.toLowerCase()] : null;
-  if (!decision.action) decision.action = info && info.action ? info.action : ACTIONS.KEEP;
+  var combined = combineLabelActions(decision.labels || [], labels);
+  if (!decision.action) decision.action = combined.action;
   if (decision.action === ACTIONS.ARCHIVE_LATER) {
     if (!isDayCount_(decision.days)) {
-      decision.days = info && isDayCount_(info.days) ? info.days : DEFAULT_ARCHIVE_DAYS;
+      decision.days = isDayCount_(combined.days) ? combined.days : DEFAULT_ARCHIVE_DAYS;
     }
   } else {
     decision.days = null;
   }
   return decision;
+}
+
+/** The least aggressive action among the labels (no labels, or a label with no settings: keep). */
+function combineLabelActions(names, labels) {
+  var order = [ACTIONS.KEEP, ACTIONS.ARCHIVE_LATER, ACTIONS.ARCHIVE, ACTIONS.ARCHIVE_READ];
+  if (!names.length) return { action: ACTIONS.KEEP, days: null };
+  var rank = order.length - 1;
+  var days = null;
+  names.forEach(function(n) {
+    var info = labels[String(n).toLowerCase()];
+    var action = info && info.action ? info.action : ACTIONS.KEEP;
+    rank = Math.min(rank, order.indexOf(action) < 0 ? 0 : order.indexOf(action));
+    if (action === ACTIONS.ARCHIVE_LATER) {
+      var d = info && isDayCount_(info.days) ? info.days : DEFAULT_ARCHIVE_DAYS;
+      days = days === null ? d : Math.max(days, d);
+    }
+  });
+  return { action: order[rank], days: order[rank] === ACTIONS.ARCHIVE_LATER ? days : null };
 }
 
 function isDayCount_(n) {

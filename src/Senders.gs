@@ -15,14 +15,14 @@
  * A row for "@example.com" applies to everyone at that domain who has no row of their own.
  */
 
-var SENDERS_HEADER = ['Sender', 'Label', 'Inbox action', 'Type', 'Times seen', 'Times agreed',
+var SENDERS_HEADER = ['Sender', 'Labels (use | for several)', 'Inbox action', 'Type', 'Times seen', 'Times agreed',
   'Source', 'You emailed them', 'Checked', 'Last seen', 'Note'];
 var SENDER_SOURCES = ['you', 'rescued', 'suggested', 'claude'];
 var KNOWN_CONTACT_RECHECK_MS = 14 * DAY_MS;
 
 function newSenderRow_(sender) {
   return {
-    index: null, sender: sender, label: '', action: '', type: '', seen: 0, agreed: 0,
+    index: null, sender: sender, labels: [], action: '', type: '', seen: 0, agreed: 0,
     source: '', emailed: '', checked: null, lastSeen: null, note: ''
   };
 }
@@ -31,7 +31,7 @@ function rowFromValues_(v, index) {
   return {
     index: index,
     sender: String(v[0] || '').trim().toLowerCase(),
-    label: String(v[1] || '').trim(),
+    labels: splitLabels(v[1]),
     action: normalizeAction(v[2]),
     type: String(v[3] || '').trim().toLowerCase(),
     seen: parseInt(v[4], 10) || 0,
@@ -45,7 +45,7 @@ function rowFromValues_(v, index) {
 }
 
 function valuesFromRow_(r) {
-  return [safeCell(r.sender), safeCell(r.label), r.action, r.type, r.seen, r.agreed, r.source,
+  return [safeCell(r.sender), safeCell(joinLabels(r.labels)), r.action, r.type, r.seen, r.agreed, r.source,
     r.emailed, r.checked || '', r.lastSeen || '', safeCell(r.note)];
 }
 
@@ -110,9 +110,9 @@ function rememberClaudeDecision(store, email, decision) {
   if (row.source && row.source !== 'claude') return;
 
   var consistent = decision.confidence !== 'low' && !decision.needsAttention;
-  var same = row.source === 'claude' && row.label === decision.label && row.type === decision.type;
+  var same = row.source === 'claude' && sameLabels(row.labels, decision.labels) && row.type === decision.type;
   row.source = 'claude';
-  row.label = decision.label;
+  row.labels = (decision.labels || []).slice();
   row.type = decision.type;
   row.action = '';            // follows the label's Inbox action on the Labels sheet
   row.agreed = consistent ? (same ? row.agreed + 1 : 1) : 0;
@@ -191,7 +191,7 @@ function senderCorrections(store, max) {
       var choice = r.action === ACTIONS.KEEP || r.source === 'rescued'
         ? 'keep in the inbox'
         : (r.action ? r.action.toLowerCase() : 'file');
-      if (r.label) choice += ', label ' + r.label;
+      if (r.labels.length) choice += ', labels ' + r.labels.join(', ');
       return { sender: r.sender, subject: m ? m[1] : '', choice: choice };
     });
 }

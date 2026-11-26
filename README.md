@@ -13,7 +13,7 @@ Each new conversation goes through these steps. The first one with an answer win
 | 1. Your choices | Senders you marked yourself (Senders sheet, Source = `you`) | free |
 | 2. Rules | Exact matches on the Rules sheet. GitHub notifications are handled here. | free |
 | 3. Memory | Senders it has learned, or that you accepted from Suggestions | free |
-| 4. Claude | Everything else. Claude picks one of your labels, says what kind of sender it is, and how sure it is. | a small fraction of a cent per email on Haiku 5.5 |
+| 4. Claude | Everything else. Claude picks every one of your labels that applies (usually one, sometimes two or three), says what kind of sender it is, and how sure it is. | a small fraction of a cent per email on Haiku 5.5 |
 
 There is one rule on top of those steps: **mail from people you know is never archived.** That means anyone you have emailed, anyone at your own company's domain, any conversation you wrote in, and anything you sent. Only your own explicit choice (step 1) can override it.
 
@@ -26,7 +26,7 @@ Claude puts every sender into one of four types:
 - **automated**: notifications, receipts, alerts.
 - **bulk**: newsletters and promotions.
 
-For automated and bulk mail, what happens next is the **Inbox action** of the label Claude chose, which you set on the Labels sheet:
+For automated and bulk mail, what happens next is the **Inbox action** of the labels Claude chose, which you set on the Labels sheet. When an email has several labels, the gentlest action wins: it only leaves the inbox if every one of its labels says so.
 
 | Inbox action | Effect |
 |---|---|
@@ -35,7 +35,7 @@ For automated and bulk mail, what happens next is the **Inbox action** of the la
 | Archive + mark read | Labelled, archived, marked read |
 | Archive after days | Stays for N days, then archived |
 
-Two things keep an email in the inbox whatever its label says: Claude marks it as needing your attention (a failed payment, an unexpected security alert, a direct question), or Claude isn't sure. Unsure emails also get the `Needs Review` label.
+Two things keep an email in the inbox whatever its labels say: Claude marks it as needing your attention (a failed payment, an unexpected security alert, a direct question), or Claude isn't sure. Unsure emails also get the `Needs Review` label.
 
 ### Rules that come built in
 
@@ -60,7 +60,7 @@ There is no hidden model. Everything it learns is a row you can read and edit.
 
 | You do this in Gmail | It learns |
 |---|---|
-| Change a label it chose (say Newsletters → Receipts) | Recorded on the **Corrections** sheet and shown to Claude as an example from then on. For automated and bulk senders (receipts, alerts, newsletters), that sender's future mail also goes straight to your label. People aren't locked to one label, since their mail varies. |
+| Change or add a label on something it sorted (say Newsletters → Receipts, or add "urgent items") | Recorded on the **Corrections** sheet and shown to Claude as an example from then on. For automated and bulk senders (receipts, alerts, newsletters), that sender's future mail also gets your labels. People aren't locked to fixed labels, since their mail varies. Removing a label without adding one isn't treated as a correction. |
 | Apply `Sorter/Always keep` | That sender is never archived again |
 | Apply `Sorter/Always archive` | That sender is always archived and marked read, which is good for HubSpot-style mail that slips through |
 | Move something from `Sorter/Archived` back to the inbox | That sender's mail stays in the inbox from now on |
@@ -128,7 +128,7 @@ An API key comes from [console.anthropic.com](https://console.anthropic.com) →
 
 Change it with **Settings → Choose model**. **Status** shows today's estimated spend. Each email is a single request with the effort setting on `low`. Your labels and instructions are cached between emails, and repeat senders stop costing anything once learned.
 
-Claude's answer is forced into a fixed format (structured outputs), so it can only name one of your labels. On Sonnet and Opus, if a safety filter declines an email, the API retries it on another model. If your key is rejected or your credits run out, rules and memory keep working and Claude is retried hourly.
+Claude's answer is forced into a fixed format (structured outputs), so it can only name labels you actually have. On Sonnet and Opus, if a safety filter declines an email, the API retries it on another model. If your key is rejected or your credits run out, rules and memory keep working and Claude is retried hourly.
 
 ## Sheets
 

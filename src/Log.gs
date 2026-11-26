@@ -25,7 +25,7 @@ function describeInbox(decision) {
 var SORTED_BY_NAMES = { you: 'You', rule: 'Rule', memory: 'Memory', claude: 'Claude' };
 
 function logDecision(run, f, decision) {
-  var label = decision.label || '';
+  var label = (decision.labels || []).join(', ');
   if (decision.review) label += (label ? ', ' : '') + run.reviewLabel;
   run.logs.push({
     values: [new Date(), f.fromHeader, f.subject, SORTED_BY_NAMES[decision.by] || decision.by,

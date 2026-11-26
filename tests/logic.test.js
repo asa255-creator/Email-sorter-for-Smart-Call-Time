@@ -104,7 +104,7 @@ test('rules skip disabled and incomplete rows; actions are normalised', () => {
   ]);
   assert.equal(rules.length, 1);
   assert.equal(rules[0].action, S.ACTIONS.ARCHIVE);
-  assert.equal(S.matchRule(rules, features({ subject: 'Your RECEIPT from Acme' })).label, 'Finance');
+  assert.deepEqual(plain(S.matchRule(rules, features({ subject: 'Your RECEIPT from Acme' })).labels), ['Finance']);
   assert.equal(S.normalizeAction('archive + mark read'), S.ACTIONS.ARCHIVE_READ);
   assert.equal(S.normalizeAction('nonsense'), '');
 });
@@ -127,27 +127,27 @@ function ctxWith(over) {
   }, over);
 }
 
-const ai = (over) => Object.assign({ sender_type: 'bulk', label: 'Newsletters', needs_attention: false,
+const ai = (over) => Object.assign({ sender_type: 'bulk', labels: ['Newsletters'], needs_attention: false,
   confidence: 'high', reason: 'A newsletter.' }, over);
 
 test('people you know are never archived, even by a rule', () => {
-  const rule = { label: 'Newsletters', action: 'Archive', days: null, note: 'n', field: 'From', patterns: ['x'] };
+  const rule = { labels: ['Newsletters'], action: 'Archive', days: null, note: 'n', field: 'From', patterns: ['x'] };
   const d = S.decideWithoutClaude(ctxWith({ rule, known: { strong: true, why: 'you have emailed this sender' } }));
   assert.equal(d.by, 'rule');
-  assert.equal(d.label, 'Newsletters');
+  assert.deepEqual(plain(d.labels), ['Newsletters']);
   assert.equal(d.action, S.ACTIONS.KEEP);
   assert.match(d.reason, /you have emailed this sender/);
 });
 
 test('your explicit "always archive" wins over everything', () => {
-  const row = { sender: 'rep@sales.io', source: 'you', action: 'Archive + mark read', label: '', type: '' };
+  const row = { sender: 'rep@sales.io', source: 'you', action: 'Archive + mark read', labels: [], type: '' };
   const d = S.decideWithoutClaude(ctxWith({ senderRow: row, known: { strong: true, why: 'you have emailed this sender' } }));
   assert.equal(d.by, 'you');
   assert.equal(d.action, S.ACTIONS.ARCHIVE_READ);
 });
 
 test('learned senders skip Claude only after agreeing enough times', () => {
-  const row = { sender: 'news@x.com', source: 'claude', label: 'Newsletters', action: '', type: 'bulk', agreed: 2 };
+  const row = { sender: 'news@x.com', source: 'claude', labels: ['Newsletters'], action: '', type: 'bulk', agreed: 2 };
   assert.equal(S.decideWithoutClaude(ctxWith({ senderRow: row })), null);
   row.agreed = 3;
   const d = S.decideWithoutClaude(ctxWith({ senderRow: row }));
@@ -158,17 +158,17 @@ test('learned senders skip Claude only after agreeing enough times', () => {
 });
 
 test('cold outreach from a stranger gets the outreach label and its action', () => {
-  const d = S.decideFromClaude(ctxWith(), ai({ sender_type: 'cold_outreach', label: 'NONE' }));
-  assert.equal(d.label, 'Cold Outreach');
+  const d = S.decideFromClaude(ctxWith(), ai({ sender_type: 'cold_outreach', labels: [] }));
+  assert.deepEqual(plain(d.labels), ['Cold Outreach']);
   assert.equal(d.action, S.ACTIONS.ARCHIVE_READ);
-  const pushy = S.decideFromClaude(ctxWith(), ai({ sender_type: 'cold_outreach', label: 'NONE', needs_attention: true }));
+  const pushy = S.decideFromClaude(ctxWith(), ai({ sender_type: 'cold_outreach', labels: [], needs_attention: true }));
   assert.equal(pushy.action, S.ACTIONS.ARCHIVE_READ, '"worth a quick chat?" does not keep a pitch in the inbox');
 });
 
 test('a "pitch" from someone you have emailed stays in the inbox', () => {
   const d = S.decideFromClaude(ctxWith({ known: { strong: true, why: 'you have emailed this sender' } }),
-    ai({ sender_type: 'cold_outreach', label: 'Clients' }));
-  assert.equal(d.label, 'Clients');
+    ai({ sender_type: 'cold_outreach', labels: ['Clients'] }));
+  assert.deepEqual(plain(d.labels), ['Clients']);
   assert.equal(d.action, S.ACTIONS.KEEP);
 });
 
@@ -184,11 +184,11 @@ test('people, urgent mail and unsure answers stay in the inbox', () => {
 
 test('label settings decide the action, including archive-after days', () => {
   assert.equal(S.decideFromClaude(ctxWith(), ai()).action, S.ACTIONS.ARCHIVE);
-  const r = S.decideFromClaude(ctxWith(), ai({ sender_type: 'automated', label: 'Receipts' }));
+  const r = S.decideFromClaude(ctxWith(), ai({ sender_type: 'automated', labels: ['Receipts'] }));
   assert.equal(r.action, S.ACTIONS.ARCHIVE_LATER);
   assert.equal(r.days, 5);
-  const none = S.decideFromClaude(ctxWith(), ai({ label: 'NONE' }));
-  assert.equal(none.label, '');
+  const none = S.decideFromClaude(ctxWith(), ai({ labels: [] }));
+  assert.deepEqual(plain(none.labels), []);
   assert.equal(none.action, S.ACTIONS.KEEP);
 });
 
@@ -202,7 +202,8 @@ test('request uses structured output, low effort, caching and fallbacks on Sonne
   assert.equal(req.payload.model, 'claude-sonnet-5-5');
   assert.equal(req.payload.output_config.effort, 'low');
   assert.equal(req.payload.output_config.format.type, 'json_schema');
-  assert.deepEqual(plain(req.payload.output_config.format.schema.properties.label.enum), ['Clients', 'Newsletters', 'NONE']);
+  assert.deepEqual(plain(req.payload.output_config.format.schema.properties.labels.items.enum), ['Clients', 'Newsletters']);
+  assert.equal(req.payload.output_config.format.schema.properties.labels.type, 'array');
   assert.equal(req.payload.output_config.format.schema.additionalProperties, false);
   assert.deepEqual(plain(req.payload.system[0].cache_control), { type: 'ephemeral' });
   assert.equal(req.payload.fallbacks, 'default');
@@ -225,14 +226,14 @@ test('responses map to the right error kinds', () => {
   assert.equal(kind(200, JSON.stringify({ stop_reason: 'refusal', content: [] })), 'refusal');
   assert.equal(kind(200, JSON.stringify({ stop_reason: 'max_tokens', content: [] })), 'bad_response');
   assert.equal(kind(200, JSON.stringify({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'oops' }] })), 'bad_response');
-  const ok = S.interpretClaudeResponse(200, claudeOk({ label: 'Clients' }).body);
-  assert.equal(ok.result.label, 'Clients');
+  const ok = S.interpretClaudeResponse(200, claudeOk({ labels: ['Clients'] }).body);
+  assert.deepEqual(plain(ok.result.labels), ['Clients']);
 });
 
 test('answers outside the allowed values fall back to safe ones', () => {
-  const v = S.validateClassification({ sender_type: 'robot', label: 'Invented', confidence: 'sure', reason: 'r' }, ['Clients']);
+  const v = S.validateClassification({ sender_type: 'robot', labels: ['Invented', 'Clients', 'Clients'], confidence: 'sure', reason: 'r' }, ['Clients']);
   assert.equal(v.sender_type, 'person');
-  assert.equal(v.label, 'NONE');
+  assert.deepEqual(plain(v.labels), ['Clients'], 'unknown labels dropped, duplicates merged');
   assert.equal(v.confidence, 'low');
   assert.equal(v.needs_attention, false);
 });
@@ -259,15 +260,15 @@ test('cost estimate uses the served model price', () => {
 
 test('sender memory counts agreement and resets on uncertainty', () => {
   const store = S.makeSenderStore([]);
-  const d = { label: 'Newsletters', type: 'bulk', confidence: 'high', needsAttention: false };
+  const d = { labels: ['Newsletters'], type: 'bulk', confidence: 'high', needsAttention: false };
   S.rememberClaudeDecision(store, 'news@x.com', d);
   S.rememberClaudeDecision(store, 'news@x.com', d);
   assert.equal(store.byKey['news@x.com'].agreed, 2);
   S.rememberClaudeDecision(store, 'news@x.com', Object.assign({}, d, { needsAttention: true }));
   assert.equal(store.byKey['news@x.com'].agreed, 0);
-  S.rememberClaudeDecision(store, 'news@x.com', Object.assign({}, d, { label: 'Receipts' }));
+  S.rememberClaudeDecision(store, 'news@x.com', Object.assign({}, d, { labels: ['Receipts'] }));
   assert.equal(store.byKey['news@x.com'].agreed, 1);
-  assert.equal(store.byKey['news@x.com'].label, 'Receipts');
+  assert.deepEqual(plain(store.byKey['news@x.com'].labels), ['Receipts']);
 });
 
 test('sender memory never overwrites your own choice; domain rows apply to the whole domain', () => {
@@ -275,9 +276,9 @@ test('sender memory never overwrites your own choice; domain rows apply to the w
     ['boss@acme.com', 'Clients', 'Keep in inbox', 'person', 1, 0, 'you', '', '', '', ''],
     ['@spammy.io', 'Cold Outreach', 'Archive + mark read', '', 0, 0, 'you', '', '', '', '']
   ]);
-  S.rememberClaudeDecision(store, 'boss@acme.com', { label: 'Newsletters', type: 'bulk', confidence: 'high' });
-  assert.equal(store.byKey['boss@acme.com'].label, 'Clients');
-  assert.equal(S.findSender(store, 'anyone@spammy.io').label, 'Cold Outreach');
+  S.rememberClaudeDecision(store, 'boss@acme.com', { labels: ['Newsletters'], type: 'bulk', confidence: 'high' });
+  assert.deepEqual(plain(store.byKey['boss@acme.com'].labels), ['Clients']);
+  assert.deepEqual(plain(S.findSender(store, 'anyone@spammy.io').labels), ['Cold Outreach']);
   assert.equal(S.findSender(store, 'x@other.com'), null);
 });
 
@@ -314,9 +315,9 @@ test('cells that look like formulas are neutralised', () => {
 test('Sentry goes to your existing warnings label and stays in the inbox', () => {
   const rules = S.parseRules(S.defaultRulesFor(['Clients', 'warnings (about products or services)', 'Warnings/Old']));
   const r = S.matchRule(rules, features({ fromHeader: 'Sentry <noreply@md.getsentry.com>', subject: 'API-123 - TypeError' }));
-  assert.equal(r.label, 'warnings (about products or services)');
+  assert.deepEqual(plain(r.labels), ['warnings (about products or services)']);
   assert.equal(r.action, S.ACTIONS.KEEP);
-  assert.equal(S.parseRules(S.defaultRulesFor([]))[0].label, 'Warnings', 'falls back to a Warnings label');
+  assert.deepEqual(plain(S.parseRules(S.defaultRulesFor([]))[0].labels), ['Warnings'], 'falls back to a Warnings label');
 });
 
 test('label ideas count distinct emails and fire at the threshold', () => {
@@ -341,21 +342,47 @@ test('suggested label names are cleaned and sorter names refused', () => {
   assert.equal(S.normalizeLabelName(''), '');
 });
 
-test('a label you swap in Gmail is found; ancestors and sorter labels are not your choice', () => {
-  assert.equal(S.findRelabel(['Work', 'Work/Clients'], 'Work/Tech'), 'Work/Clients');
-  assert.equal(S.findRelabel(['Work', 'Work/Tech'], 'Work/Tech'), '', 'unchanged');
-  assert.equal(S.findRelabel(['Work'], 'Work/Tech'), '', 'only the parent left: nothing chosen');
-  assert.equal(S.findRelabel(['Needs Review', 'Receipts'], 'Newsletters', ['Needs Review']), 'Receipts');
-  assert.equal(S.findRelabel(['_sorted', 'Sorter/Archived'], 'Newsletters'), '');
+test('label changes you make in Gmail are found, including added labels; leftover parents are not a choice', () => {
+  const change = (before, now) => plain(S.labelChange(before, now));
+  assert.deepEqual(change(['Work', 'Work/Tech'], ['Work', 'Work/Clients']), { was: ['Work/Tech'], now: ['Work/Clients'] });
+  assert.equal(S.labelChange(['Work', 'Work/Tech'], ['Work/Tech', 'Work']), null, 'unchanged');
+  assert.equal(S.labelChange(['Work', 'Work/Tech'], ['Work']), null, 'only removed: treated as tidying up');
+  assert.deepEqual(change(['Receipts'], ['Receipts', 'urgent items']), { was: ['Receipts'], now: ['Receipts', 'urgent items'] });
+  assert.deepEqual(change(['scts', 'scts/legal', 'scts/legal/tcpa'], ['scts', 'scts/legal', 'scts/tech']),
+    { was: ['scts/legal/tcpa'], now: ['scts/tech'] });
+  assert.deepEqual(change([], ['Clients']), { was: [], now: ['Clients'] });
+});
+
+test('label lists: split, join, leaves and combined inbox action', () => {
+  assert.deepEqual(plain(S.splitLabels(' A | b |A| ')), ['A', 'b']);
+  assert.equal(S.joinLabels(['A', 'B']), 'A | B');
+  assert.deepEqual(plain(S.leafLabels(['Work', 'Work/Tech', 'urgent items'])), ['Work/Tech', 'urgent items']);
+  const labels = {
+    a: { action: 'Archive + mark read' }, b: { action: 'Archive' }, c: { action: 'Archive after days', days: 5 },
+    d: { action: 'Keep in inbox' }, e: { action: 'Archive after days', days: 2 }
+  };
+  const combine = (names) => plain(S.combineLabelActions(names, labels));
+  assert.deepEqual(combine(['a', 'b']), { action: 'Archive', days: null }, 'the gentler of the two wins');
+  assert.deepEqual(combine(['a', 'c', 'e']), { action: 'Archive after days', days: 5 });
+  assert.deepEqual(combine(['a', 'd']), { action: 'Keep in inbox', days: null }, 'any keep label keeps it');
+  assert.deepEqual(combine(['a', 'unknown']), { action: 'Keep in inbox', days: null });
+  assert.deepEqual(combine([]), { action: 'Keep in inbox', days: null });
+});
+
+test('an email can get a topic label and an urgency label; it stays in the inbox if either says keep', () => {
+  const ctx = ctxWith({ labels: Object.assign({}, LABELS, { 'urgent items': { name: 'urgent items', action: 'Keep in inbox' } }) });
+  const d = S.decideFromClaude(ctx, ai({ sender_type: 'automated', labels: ['Receipts', 'urgent items'] }));
+  assert.deepEqual(plain(d.labels), ['Receipts', 'urgent items']);
+  assert.equal(d.action, S.ACTIONS.KEEP);
 });
 
 test('the schema lets Claude suggest a new label; the prompt shows your label changes', () => {
   const schema = S.buildClassifierSchema(['A']);
   assert.ok(schema.required.includes('new_label'));
-  const v = S.validateClassification({ sender_type: 'automated', label: 'A', confidence: 'high', reason: 'r',
+  const v = S.validateClassification({ sender_type: 'automated', labels: ['A'], confidence: 'high', reason: 'r',
     new_label: ' Finance / Receipts ', new_label_description: 'Receipts' }, ['A']);
   assert.equal(v.new_label, 'Finance/Receipts');
   const p = S.buildClassifierSystemPrompt([], '', [], [{ sender: 'a@b.com', subject: 'Invoice 7', was: 'Newsletters', now: 'Receipts' }]);
-  assert.match(p, /a@b\.com, "Invoice 7": you chose Newsletters, they moved it to Receipts/);
+  assert.match(p, /a@b\.com, "Invoice 7": you chose Newsletters, they changed it to Receipts/);
   assert.match(p, /new_label/);
 });

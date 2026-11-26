@@ -99,18 +99,18 @@ test('a full run sorts GitHub, people, sales sequences and newsletters correctly
     claudeCalls.push({ email, payload, headers: params.headers });
     if (/growthly/.test(email)) {
       return claudeOk({ reason: 'Templated pitch with HubSpot tracking from a stranger.', sender_type: 'cold_outreach',
-        label: 'NONE', needs_attention: false, confidence: 'high' });
+        labels: [], needs_attention: false, confidence: 'high' });
     }
     if (/weekly-digest/.test(email)) {
-      return claudeOk({ reason: 'Weekly newsletter.', sender_type: 'bulk', label: 'Newsletters',
+      return claudeOk({ reason: 'Weekly newsletter.', sender_type: 'bulk', labels: ['Newsletters'],
         needs_attention: false, confidence: 'high' });
     }
     if (/client@acme/.test(email)) {
       // Even if Claude got it wrong, a known contact must stay in the inbox.
-      return claudeOk({ reason: 'Looks like marketing.', sender_type: 'cold_outreach', label: 'Newsletters',
+      return claudeOk({ reason: 'Looks like marketing.', sender_type: 'cold_outreach', labels: ['Newsletters'],
         needs_attention: false, confidence: 'high' });
     }
-    return claudeOk({ reason: 'Unclear.', sender_type: 'person', label: 'NONE', needs_attention: false, confidence: 'low' });
+    return claudeOk({ reason: 'Unclear.', sender_type: 'person', labels: [], needs_attention: false, confidence: 'low' });
   });
   const { ss, ctx: S, gmail } = w;
   setLabelAction(ss, 'Newsletters', 'Archive');
@@ -206,7 +206,7 @@ test('a repeat automated sender is sorted from memory after it is learned', () =
   let calls = 0;
   const w = upgradedWorld(() => {
     calls++;
-    return claudeOk({ reason: 'Newsletter.', sender_type: 'bulk', label: 'Newsletters', needs_attention: false, confidence: 'high' });
+    return claudeOk({ reason: 'Newsletter.', sender_type: 'bulk', labels: ['Newsletters'], needs_attention: false, confidence: 'high' });
   });
   const { ss, ctx: S, gmail } = w;
   setLabelAction(ss, 'Newsletters', 'Archive');
@@ -222,7 +222,7 @@ test('a repeat automated sender is sorted from memory after it is learned', () =
 });
 
 test('you teach it from Gmail: Always archive, Always keep, and moving mail back', () => {
-  const w = upgradedWorld(() => claudeOk({ reason: 'Newsletter.', sender_type: 'bulk', label: 'Newsletters',
+  const w = upgradedWorld(() => claudeOk({ reason: 'Newsletter.', sender_type: 'bulk', labels: ['Newsletters'],
     needs_attention: false, confidence: 'high' }));
   const { ss, ctx: S, gmail, scriptProps } = w;
   setLabelAction(ss, 'Newsletters', 'Archive');
@@ -345,7 +345,7 @@ test('Docs shares are judged by who shared them; colleagues at your domain are n
   const seen = [];
   const w = upgradedWorld((payload) => {
     seen.push(payload.messages[0].content);
-    return claudeOk({ reason: 'Automated notice.', sender_type: 'automated', label: 'Newsletters',
+    return claudeOk({ reason: 'Automated notice.', sender_type: 'automated', labels: ['Newsletters'],
       needs_attention: false, confidence: 'high' });
   });
   const { ss, ctx: S, gmail } = w;
@@ -373,7 +373,7 @@ test('Docs shares are judged by who shared them; colleagues at your domain are n
 });
 
 test('Claude can create a new sub-label after suggesting it for three different emails', () => {
-  const w = upgradedWorld(() => claudeOk({ reason: 'Receipt.', sender_type: 'automated', label: 'NONE',
+  const w = upgradedWorld(() => claudeOk({ reason: 'Receipt.', sender_type: 'automated', labels: [],
     needs_attention: false, confidence: 'high', new_label: 'Finance/Receipts',
     new_label_description: 'Receipts and invoices for purchases' }));
   const { ss, ctx: S, gmail } = w;
@@ -391,7 +391,7 @@ test('Claude can create a new sub-label after suggesting it for three different 
   assert.ok(ss.getSheetByName('Log').data(7).some((r) => r[3] === 'New label'));
 
   // With auto-create off, the idea is only logged.
-  const w2 = upgradedWorld(() => claudeOk({ reason: 'Receipt.', sender_type: 'automated', label: 'NONE',
+  const w2 = upgradedWorld(() => claudeOk({ reason: 'Receipt.', sender_type: 'automated', labels: [],
     needs_attention: false, confidence: 'high', new_label: 'Finance/Receipts', new_label_description: 'Receipts' }));
   w2.ctx.setConfig('auto_create_labels', 'no');
   ['a', 'b', 'c'].forEach((id) => w2.gmail.addThread(id, [{ from: 'x@' + id + '.com', to: ME, subject: 'r', date: ago(HOUR) }]));
@@ -403,7 +403,7 @@ test('Claude can create a new sub-label after suggesting it for three different 
 test('changing a label in Gmail teaches it: automated senders follow you, people become examples', () => {
   const w = upgradedWorld((payload) => {
     const person = /Pat </.test(payload.messages[0].content);
-    return claudeOk({ reason: 'x', sender_type: person ? 'person' : 'automated', label: 'Newsletters',
+    return claudeOk({ reason: 'x', sender_type: person ? 'person' : 'automated', labels: ['Newsletters'],
       needs_attention: false, confidence: 'high', new_label: '', new_label_description: '' });
   });
   const { ss, ctx: S, gmail, scriptProps } = w;
@@ -418,8 +418,9 @@ test('changing a label in Gmail teaches it: automated senders follow you, people
   ['bill', 'pat'].forEach((id) => {
     gmail.thread(id).labels.delete('Newsletters');
     gmail.thread(id).labels.add('Receipts');
-    const v = scriptProps.getProperty('l:' + id).split('|');
-    scriptProps.setProperty('l:' + id, [S.encodeTime(Date.now() - 2 * HOUR)].concat(v.slice(1)).join('|'));
+    const v = JSON.parse(scriptProps.getProperty('l:' + id));
+    v.t = S.encodeTime(Date.now() - 2 * HOUR);
+    scriptProps.setProperty('l:' + id, JSON.stringify(v));
   });
   S.runSorter_({ forceSweep: true });
 
@@ -433,7 +434,7 @@ test('changing a label in Gmail teaches it: automated senders follow you, people
     ['billing@saas.com', 'Invoice 7', 'Newsletters', 'Receipts'],
     ['pat@friend.org', 'Lunch?', 'Newsletters', 'Receipts']
   ]);
-  assert.match(S.buildClassifierSystemPrompt([], '', [], S.readRelabels(20)), /they moved it to Receipts/);
+  assert.match(S.buildClassifierSystemPrompt([], '', [], S.readRelabels(20)), /they changed it to Receipts/);
 
   // Next invoice from that sender goes straight to Receipts, no Claude.
   gmail.addThread('bill2', [{ from: 'billing@saas.com', to: ME, subject: 'Invoice 8', date: ago(60000) }]);
@@ -509,4 +510,26 @@ test('descriptions wiped by an earlier upgrade come back from a copied "Labels (
   assert.equal(map.newsletters.description, 'Newsletters and digests I subscribed to');
   assert.equal(map.clients.action, 'Archive', 'nothing else on the sheet is undone');
   assert.equal(ss.getSheetByName('Labels (old)'), null);
+});
+
+test('Claude can give an email several labels, and your rules and sender choices can too', () => {
+  const w = upgradedWorld((payload) => claudeOk({ reason: 'Contract with a deadline.', sender_type: 'automated',
+    labels: ['Clients', 'Newsletters'], needs_attention: false, confidence: 'high', new_label: '', new_label_description: '' }));
+  const { ss, ctx: S, gmail } = w;
+  setLabelAction(ss, 'Newsletters', 'Archive');
+  gmail.addThread('both', [{ from: 'docs@esign.example', to: ME, subject: 'Sign by Friday', date: ago(HOUR) }]);
+  // A rule with two labels.
+  ss.getSheetByName('Rules').appendRow([true, 'From', 'billing@vendor.example', 'Clients | Newsletters', 'Archive', '', 'two labels']);
+  gmail.addThread('rule2', [{ from: 'billing@vendor.example', to: ME, subject: 'Invoice', date: ago(HOUR) }]);
+  S.runSorter();
+
+  const both = gmail.thread('both');
+  assert.ok(both.labels.has('Clients') && both.labels.has('Newsletters'), 'both labels applied');
+  assert.equal(both.inbox, true, 'Clients says keep, so it stays even though Newsletters archives');
+  const rule2 = gmail.thread('rule2');
+  assert.ok(rule2.labels.has('Clients') && rule2.labels.has('Newsletters'));
+  assert.equal(rule2.inbox, false, 'the rule\'s own action applies');
+  assert.equal(senderRows(ss)['docs@esign.example'][1], 'Clients | Newsletters', 'memory keeps both');
+  const log = ss.getSheetByName('Log').data(7).find((r) => r[2] === 'Sign by Friday');
+  assert.equal(log[4], 'Clients, Newsletters');
 });

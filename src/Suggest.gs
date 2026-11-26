@@ -285,7 +285,7 @@ function applySuggestions() {
     var known = labels.map[s.label.toLowerCase()];
     var row = store.byKey[s.sender];
     if (!known || (row && (row.source === 'you' || row.source === 'rescued'))) { skipped++; return; }
-    teachSender(store, s.sender, { source: 'suggested', label: known.name, action: '',
+    teachSender(store, s.sender, { source: 'suggested', labels: [known.name], action: '',
       note: 'From suggestions on ' + formatDate_(new Date()).substring(0, 10) }, Date.now());
     assigned++;
   });

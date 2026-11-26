@@ -11,14 +11,14 @@ test('every menu item runs on a fresh spreadsheet', () => {
     me: ME,
     uiAnswers: ['sk-ant-new-key', '2'],
     claude: (payload) => {
-      if (payload.output_config.format.schema.properties.labels) {
+      if (payload.output_config.format.schema.properties.senders) {
         return claudeOk({
           notes: 'Lots of receipts.',
           labels: [{ name: 'Receipts', description: 'Purchases', inbox_action: 'Archive', archive_after_days: 0, already_exists: false }],
           senders: [{ sender: 'shop@store.com', label: 'Receipts' }]
         });
       }
-      return claudeOk({ reason: 'Sales pitch.', sender_type: 'cold_outreach', label: 'NONE', needs_attention: false, confidence: 'high' });
+      return claudeOk({ reason: 'Sales pitch.', sender_type: 'cold_outreach', labels: [], needs_attention: false, confidence: 'high' });
     }
   });
   const { ctx: S, ss, ui, triggers, gmail, userProps } = w;

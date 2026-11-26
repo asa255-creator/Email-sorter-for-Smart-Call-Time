@@ -93,14 +93,12 @@ function labelSearchTerm(name) {
   return 'label:' + String(name).toLowerCase().replace(/[\s\/]+/g, '-');
 }
 
-/** The most specific of your own labels on a conversation, or ''. */
-function userLabelOf(thread, exclude) {
+/** Your own labels on a conversation (not the sorter's), minus any in `exclude`. */
+function userLabelsOf(thread, exclude) {
   var skip = (exclude || []).map(function(n) { return String(n).toLowerCase(); });
-  var names = thread.getLabels()
+  return thread.getLabels()
     .map(function(l) { return l.getName(); })
-    .filter(function(n) { return isUserLabelName(n) && skip.indexOf(n.toLowerCase()) < 0; })
-    .sort(function(a, b) { return b.split('/').length - a.split('/').length; });
-  return names[0] || '';
+    .filter(function(n) { return isUserLabelName(n) && skip.indexOf(n.toLowerCase()) < 0; });
 }
 
 // ============================================================================

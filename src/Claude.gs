@@ -41,7 +41,7 @@ function buildClassifierSystemPrompt(labels, notes, corrections, relabels) {
   var lines = [
     'You sort incoming email for one person, using their own labels. For each email you get the sender, ' +
     'some facts about how it was sent, and the start of the latest message. Decide what kind of sender ' +
-    'wrote it and which label fits.',
+    'wrote it and which labels fit.',
     '',
     'Sender types:',
     '- person: a human writing to this person as an individual. Colleagues, clients, friends, family, ' +
@@ -60,12 +60,14 @@ function buildClassifierSystemPrompt(labels, notes, corrections, relabels) {
     'If this person has emailed the sender before, treat the sender as a person even when the email reads ' +
     'like a pitch: they have a relationship.',
     '',
-    'Labels. Pick the one that fits best, or NONE when none clearly fits. The descriptions are the person\'s ' +
-    'own definitions; follow them over your own idea of what a label name means.'
+    'Labels. Choose every label that clearly applies: usually one, sometimes two or three (for example a ' +
+    'topic label and a label about urgency). Use the most specific sub-label that fits; its parent labels are ' +
+    'added automatically, so do not list them too. Return an empty list when nothing clearly fits. The ' +
+    'descriptions are the person\'s own definitions; follow them over your own idea of what a label name means.'
   ];
 
   if (labels.length === 0) {
-    lines.push('(The person has no labels yet. Answer NONE.)');
+    lines.push('(The person has no labels yet. Return an empty list.)');
   } else {
     labels.forEach(function(l) {
       lines.push('- ' + l.name + (l.description ? ': ' + l.description : ''));
@@ -79,12 +81,12 @@ function buildClassifierSystemPrompt(labels, notes, corrections, relabels) {
     'False for routine confirmations, digests and marketing, and always false for cold_outreach (a sales ' +
     'pitch asking for a call is not something waiting on them).',
     '',
-    'confidence: high when both the sender type and the label are clear; medium when they are probably right; ' +
+    'confidence: high when both the sender type and the labels are clear; medium when they are probably right; ' +
     'low when you are guessing. Low-confidence emails stay in the inbox for the person to check.',
     '',
     'reason: one short sentence for the person\'s log saying what decided it.',
     '',
-    'new_label: usually an empty string. Fill it in only when no label fits well, or a more specific ' +
+    'new_label: usually an empty string. Fill it in only when no existing label fits well, or a more specific ' +
     'sub-label clearly would, and more email like this is likely to keep coming. Prefer a sub-label of an ' +
     'existing label, written Parent/Child (for example Finance/Receipts under Finance). Name a lasting ' +
     'category, not a single conversation or person, and never suggest one for cold_outreach. ' +
@@ -105,8 +107,8 @@ function buildClassifierSystemPrompt(labels, notes, corrections, relabels) {
   if (relabels && relabels.length) {
     lines.push('', 'Emails this person re-labelled after you sorted them. Learn from these for similar email:');
     relabels.forEach(function(r) {
-      lines.push('- ' + r.sender + (r.subject ? ', "' + r.subject + '"' : '') + ': you chose ' + r.was +
-        ', they moved it to ' + r.now);
+      lines.push('- ' + r.sender + (r.subject ? ', "' + r.subject + '"' : '') + ': you chose ' + (r.was || 'no label') +
+        ', they changed it to ' + r.now);
     });
   }
 
@@ -120,13 +122,13 @@ function buildClassifierSchema(labelNames) {
     properties: {
       reason: { type: 'string' },
       sender_type: { type: 'string', enum: SENDER_TYPES.slice() },
-      label: { type: 'string', enum: labelNames.concat(['NONE']) },
+      labels: { type: 'array', items: { type: 'string', enum: labelNames.length ? labelNames.slice() : ['NONE'] } },
       needs_attention: { type: 'boolean' },
       confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
       new_label: { type: 'string' },
       new_label_description: { type: 'string' }
     },
-    required: ['reason', 'sender_type', 'label', 'needs_attention', 'confidence', 'new_label',
+    required: ['reason', 'sender_type', 'labels', 'needs_attention', 'confidence', 'new_label',
       'new_label_description'],
     additionalProperties: false
   };
@@ -282,7 +284,7 @@ function validateClassification(result, labelNames) {
   return {
     reason: String(r.reason || '').substring(0, 300),
     sender_type: SENDER_TYPES.indexOf(r.sender_type) >= 0 ? r.sender_type : 'person',
-    label: names[r.label] ? r.label : 'NONE',
+    labels: leafLabels((Array.isArray(r.labels) ? r.labels : []).filter(function(n) { return names[n]; })).slice(0, 4),
     needs_attention: r.needs_attention === true,
     confidence: ['high', 'medium', 'low'].indexOf(r.confidence) >= 0 ? r.confidence : 'low',
     new_label: normalizeLabelName(r.new_label),
