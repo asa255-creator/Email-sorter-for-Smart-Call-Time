@@ -313,7 +313,7 @@ test('cells that look like formulas are neutralised', () => {
 
 test('Sentry goes to your existing warnings label and stays in the inbox', () => {
   const rules = S.parseRules(S.defaultRulesFor(['Clients', 'warnings (about products or services)', 'Warnings/Old']));
-  const r = S.matchRule(rules, features({ fromHeader: 'Sentry <noreply@md.getsentry.com>', subject: 'SCTS-BACKEND - Error' }));
+  const r = S.matchRule(rules, features({ fromHeader: 'Sentry <noreply@md.getsentry.com>', subject: 'API-123 - TypeError' }));
   assert.equal(r.label, 'warnings (about products or services)');
   assert.equal(r.action, S.ACTIONS.KEEP);
   assert.equal(S.parseRules(S.defaultRulesFor([]))[0].label, 'Warnings', 'falls back to a Warnings label');
