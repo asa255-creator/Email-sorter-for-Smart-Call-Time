@@ -13,7 +13,7 @@ Each new conversation goes through these steps. The first one with an answer win
 | 1. Your choices | Senders you marked yourself (Senders sheet, Source = `you`) | free |
 | 2. Rules | Exact matches on the Rules sheet. GitHub notifications are handled here. | free |
 | 3. Memory | Senders it has learned, or that you accepted from Suggestions | free |
-| 4. Claude | Everything else. Claude picks one of your labels, says what kind of sender it is, and how sure it is. | ~$0.005 per email on Sonnet 5.5 |
+| 4. Claude | Everything else. Claude picks one of your labels, says what kind of sender it is, and how sure it is. | a small fraction of a cent per email on Haiku 5.5 |
 
 There is one rule on top of those steps: **mail from people you know is never archived.** That means anyone you have emailed, anyone at your own company's domain, any conversation you wrote in, and anything you sent. Only your own explicit choice (step 1) can override it.
 
@@ -109,7 +109,7 @@ Then open the sheet, refresh, and click **Email Sorter → Set up / upgrade**. I
 
 - create or upgrade the sheets, keeping your label descriptions
 - move your Claude API key out of the Config sheet into private script storage, or ask for one
-- switch older models to Claude Sonnet 5.5
+- switch older models to Claude Haiku 5.5
 - remove the old Queue and Instructions sheets
 - create the Sorter labels in Gmail
 - start sorting every 5 minutes (change `run_every_minutes`)
@@ -122,8 +122,8 @@ An API key comes from [console.anthropic.com](https://console.anthropic.com) →
 
 | Model | Price per million tokens (in / out) | Notes |
 |---|---|---|
-| Claude Sonnet 5.5 (default) | $2 / $10 | Cheaper than the Sonnet 4.6 the old version used ($3 / $15) |
-| Claude Haiku 5.5 | $0.10 / $0.50 | About 20x cheaper; worth trying once the Log shows sorting you trust |
+| Claude Haiku 5.5 (default) | $0.10 / $0.50 | Fast and very cheap |
+| Claude Sonnet 5.5 | $2 / $10 | Switch to it if the Log shows Haiku mis-sorting |
 | Claude Opus 5.5 | $4 / $20 | Rarely needed for sorting |
 
 Change it with **Settings → Choose model**. **Status** shows today's estimated spend. Each email is a single request with the effort setting on `low`. Your labels and instructions are cached between emails, and repeat senders stop costing anything once learned.

@@ -33,16 +33,16 @@ var SORTER_LABELS = {
 
 var CLAUDE_MODELS = [
   {
-    id: 'claude-sonnet-5-5',
-    name: 'Claude Sonnet 5.5',
-    price: '$2 in / $10 out per million tokens',
-    note: 'Recommended. Cheaper than Sonnet 4.6 ($3 / $15).'
-  },
-  {
     id: 'claude-haiku-5-5',
     name: 'Claude Haiku 5.5',
     price: '$0.10 in / $0.50 out per million tokens',
-    note: 'About 20x cheaper. Worth trying once the Log shows sorting you trust.'
+    note: 'Default. Fast and very cheap: well under a tenth of a cent per email.'
+  },
+  {
+    id: 'claude-sonnet-5-5',
+    name: 'Claude Sonnet 5.5',
+    price: '$2 in / $10 out per million tokens',
+    note: 'About 20x the price. Switch to it if the Log shows Haiku mis-sorting.'
   },
   {
     id: 'claude-opus-5-5',
@@ -52,11 +52,11 @@ var CLAUDE_MODELS = [
   }
 ];
 
-// Models from v1 that get moved to Sonnet 5.5 on upgrade.
+// Models from v1 that get moved to the default model on upgrade.
 var OLD_MODELS = ['claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'];
 
 var DEFAULT_CONFIG = [
-  ['claude_model', 'claude-sonnet-5-5',
+  ['claude_model', 'claude-haiku-5-5',
     'Claude model. Change with Email Sorter > Settings > Choose model.'],
   ['claude_effort', 'low',
     'How hard Claude thinks about each email: low (recommended), medium or high. Higher costs more.'],

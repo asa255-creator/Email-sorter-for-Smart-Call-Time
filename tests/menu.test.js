@@ -47,7 +47,7 @@ test('every menu item runs on a fresh spreadsheet', () => {
   assert.match(ui.alerts[ui.alerts.length - 1].message, /on, every 5 min/);
 
   S.chooseModelFromMenu();
-  assert.equal(S.getConfig('claude_model'), 'claude-haiku-5-5');
+  assert.equal(S.getConfig('claude_model'), 'claude-sonnet-5-5', 'option 2 is Sonnet');
 
   S.setConfig('run_every_minutes', '1');
   S.resumeSorting();

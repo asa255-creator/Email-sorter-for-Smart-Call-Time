@@ -49,7 +49,7 @@ function setupSorter() {
     'This will:\n' +
     '• create or upgrade the Config, Labels, Rules, Senders and Log sheets (your label descriptions are kept)\n' +
     '• store your Claude API key privately instead of in the sheet\n' +
-    '• use Claude Sonnet 5.5\n' +
+    '• use Claude Haiku 5.5 (change it in Settings > Choose model)\n' +
     '• remove the old Queue and Instructions sheets\n' +
     '• add Sorter labels to Gmail\n' +
     '• sort your inbox every ' + runInterval_() + ' minute' + (runInterval_() === 1 ? '' : 's') + '\n\n' +

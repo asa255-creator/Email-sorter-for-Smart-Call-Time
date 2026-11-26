@@ -67,9 +67,9 @@ test('upgrade keeps your data, moves the key, switches to Sonnet 5.5 and drops t
   assert.ok(!keys.includes('claude_api_key'), 'key is no longer in the sheet');
   assert.ok(!keys.includes('chat_webhook_url'), 'chat webhook secret removed');
   assert.ok(!keys.includes('connection_mode'));
-  assert.equal(config.find((r) => r[0] === 'claude_model')[1], 'claude-sonnet-5-5');
+  assert.equal(config.find((r) => r[0] === 'claude_model')[1], 'claude-haiku-5-5');
   assert.equal(config.find((r) => r[0] === 'review_label')[1], 'Needs Review');
-  assert.ok(notes.some((n) => /Sonnet|sonnet-5-5/.test(n)));
+  assert.ok(notes.some((n) => /Haiku 5\.5/.test(n)));
 
   const labels = ss.getSheetByName('Labels').data(6);
   const byName = Object.fromEntries(labels.map((r) => [r[0], r]));
@@ -166,8 +166,10 @@ test('a full run sorts GitHub, people, sales sequences and newsletters correctly
     assert.ok(gmail.thread(id).labels.has('_sorted'), id + ' marked sorted'));
   assert.ok(gmail.hiddenLabels.some((l) => l.name === '_sorted' && l.labelListVisibility === 'labelHide'));
 
-  // Request shape: Sonnet 5.5, structured output, fallbacks.
-  assert.equal(claudeCalls[0].payload.model, 'claude-sonnet-5-5');
+  // Request shape: Haiku 5.5, structured output, low effort, no fallback beta (Haiku has none).
+  assert.equal(claudeCalls[0].payload.model, 'claude-haiku-5-5');
+  assert.equal(claudeCalls[0].payload.output_config.effort, 'low');
+  assert.equal(claudeCalls[0].payload.fallbacks, undefined);
   assert.equal(claudeCalls[0].payload.output_config.format.type, 'json_schema');
   assert.equal(claudeCalls[0].headers['x-api-key'], 'sk-ant-old-key');
   assert.equal(stats.claude, 4);

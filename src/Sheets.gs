@@ -58,8 +58,9 @@ function ensureConfigSheet(ss) {
 
   var model = String(existing.claude_model || '').trim();
   if (OLD_MODELS.indexOf(model) >= 0) {
-    existing.claude_model = 'claude-sonnet-5-5';
-    notes.push('Switched the model from ' + model + ' to claude-sonnet-5-5 (cheaper: $2/$10 instead of $3/$15 per million tokens).');
+    existing.claude_model = defaultConfigValue_('claude_model');
+    notes.push('Switched the model from ' + model + ' to Claude Haiku 5.5 ($0.10/$0.50 per million tokens). ' +
+      'Settings > Choose model changes it.');
   }
 
   if (existing.none_label && !existing.review_label) existing.review_label = existing.none_label;
