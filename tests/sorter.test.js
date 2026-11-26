@@ -10,8 +10,27 @@ const HOUR = 3600 * 1000;
 
 /** Builds a v1-style spreadsheet, then runs the upgrade the way the menu does. */
 function upgradedWorld(claude) {
+  const w = v1World(claude);
+  const { ss, ctx: S } = w;
+
+  // --- the upgrade (what setupSorter does, minus the dialogs) ---
+  const notes = S.ensureConfigSheet(ss);
+  const old = S.ensureLabelsSheet(ss, notes);
+  S.ensureRulesSheet(ss);
+  S.ensureSendersSheet(ss);
+  S.ensureLogSheet(ss);
+  S.ensureSorterLabels();
+  S.syncLabelsToSheet(old);
+  S.removeLabelsBackup(ss);
+  S.removeV1Sheets(ss);
+  w.notes = notes;
+  return w;
+}
+
+/** A spreadsheet as the old (v1) version left it. */
+function v1World(claude) {
   const w = loadSorter({ me: ME, claude, uiAnswers: [] });
-  const { ss, ctx: S, gmail } = w;
+  const { ss, gmail } = w;
 
   // --- v1 leftovers ---
   const config = ss.insertSheet('Config');
@@ -31,17 +50,6 @@ function upgradedWorld(claude) {
   ss.insertSheet('Instructions').appendRow(['old']);
   ss.insertSheet('Log').appendRow(['Timestamp', 'Email ID', 'Action', 'Details', 'Result', 'Notes']);
   ['Newsletters', 'Clients', 'Needs Review'].forEach((n) => gmail.label(n));
-
-  // --- the upgrade (what setupSorter does, minus the dialogs) ---
-  const notes = S.ensureConfigSheet(ss);
-  const old = S.ensureLabelsSheet(ss, notes);
-  S.ensureRulesSheet(ss);
-  S.ensureSendersSheet(ss);
-  S.ensureLogSheet(ss);
-  S.ensureSorterLabels();
-  S.syncLabelsToSheet(old);
-  S.removeV1Sheets(ss);
-  w.notes = notes;
   return w;
 }
 
@@ -446,4 +454,34 @@ test('a run with nothing new does no sheet work', () => {
   assert.equal(r.idle, true);
   assert.ok(!sheetsRead.includes('Senders') && !sheetsRead.includes('Labels'), 'only Config is read: ' + sheetsRead);
   assert.equal(ss.getSheetByName('Log').getLastRow(), before);
+});
+
+test('an upgrade interrupted by a Google timeout loses nothing and carries on when run again', () => {
+  const w = v1World();
+  const { ss, ctx: S, ui } = w;
+  // Make the old Log big, the way v1 left it.
+  for (let i = 0; i < 500; i++) ss.getSheetByName('Log').appendRow([new Date(), 'id' + i, 'NOTIFY', 'x', '', '']);
+
+  // Google times out while the Labels sheet is being filled in.
+  const realSync = S.syncLabelsToSheet;
+  S.syncLabelsToSheet = () => { throw new Error('Service Spreadsheets timed out while accessing document with id X.'); };
+  S.setupSorter();
+  assert.equal(ui.alerts[ui.alerts.length - 1].title, 'Setup paused');
+  assert.match(ui.alerts[ui.alerts.length - 1].message, /filling in the Labels sheet/);
+  assert.equal(ss.getSheetByName('Queue'), null, 'the old Queue went first');
+  assert.ok(S.isCurrentLog_(ss.getSheetByName('Log')), 'old Log replaced, not cleared row by row');
+  const backup = ss.getSheetByName('Labels (old)');
+  assert.ok(backup, 'your old labels are kept as a backup');
+  assert.equal(backup.get(2, 5), 'Newsletters and digests I subscribed to');
+
+  // You run it again.
+  S.syncLabelsToSheet = realSync;
+  S.setupSorter();
+  assert.equal(ui.alerts[ui.alerts.length - 1].title, 'Email Sorter is set up');
+  assert.equal(ss.getSheetByName('Labels (old)'), null, 'backup removed once the new sheet is filled in');
+  const labels = S.readLabels().map;
+  assert.equal(labels.newsletters.description, 'Newsletters and digests I subscribed to');
+  assert.equal(labels.clients.description, 'Customers and prospects I am working with');
+  assert.equal(w.userProps.getProperty('claude_api_key'), 'sk-ant-old-key');
+  assert.equal(w.triggers.length, 1);
 });

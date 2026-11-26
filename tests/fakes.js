@@ -77,6 +77,7 @@ class FakeSheet {
     this.hidden = false;
   }
   getName() { return this.name; }
+  setName(n) { this.name = n; return this; }
   get(r, c) {
     const line = this.rows[r - 1];
     const v = line ? line[c - 1] : undefined;
@@ -316,6 +317,7 @@ function loadSorter(opts) {
   const context = {
     console: { log() {}, warn() {}, error() {} },
     SpreadsheetApp: {
+      flush: () => {},
       getActive: () => ss,
       getUi: () => ui,
       newDataValidation: builder,

@@ -57,17 +57,42 @@ function setupSorter() {
     '(see the Rules sheet) and cold sales email.', ui.ButtonSet.OK_CANCEL);
   if (go !== ui.Button.OK) return;
 
-  var notes = ensureConfigSheet(ss);
-  var oldDescriptions = ensureLabelsSheet(ss, notes);
-  if (ensureRulesSheet(ss)) notes.push('Added the Rules sheet with GitHub rules.');
-  if (ensureSendersSheet(ss)) notes.push('Added the Senders sheet (sender memory).');
-  if (ensureCorrectionsSheet(ss)) notes.push('Added the Corrections sheet (labels you change in Gmail).');
-  ensureLogSheet(ss);
-  ensureStartHereSheet(ss);
-  ensureSorterLabels();
-  syncLabelsToSheet(oldDescriptions);
-  var removed = removeV1Sheets(ss);
-  if (removed.length) notes.push('Removed the old ' + removed.join(' and ') + ' sheet' + (removed.length > 1 ? 's' : '') + '.');
+  var notes = [];
+  var oldDescriptions = {};
+  // Each step can be run again safely, so if Google times out part way,
+  // running Set up / upgrade again carries on without losing anything.
+  var steps = [
+    ['removing the old Queue, Instructions and Log sheets', function() {
+      var removed = removeV1Sheets(ss);
+      if (removed.length) notes.push('Removed ' + removed.join(', ') + '.');
+    }],
+    ['upgrading the Config sheet', function() { notes = notes.concat(ensureConfigSheet(ss)); }],
+    ['upgrading the Labels sheet', function() { oldDescriptions = ensureLabelsSheet(ss, notes); }],
+    ['adding the Rules, Senders, Corrections and Log sheets', function() {
+      if (ensureRulesSheet(ss)) notes.push('Added the Rules sheet (Sentry and GitHub rules).');
+      if (ensureSendersSheet(ss)) notes.push('Added the Senders sheet (sender memory).');
+      if (ensureCorrectionsSheet(ss)) notes.push('Added the Corrections sheet (labels you change in Gmail).');
+      ensureLogSheet(ss);
+    }],
+    ['adding the Sorter labels in Gmail', function() { ensureSorterLabels(); }],
+    ['filling in the Labels sheet', function() {
+      syncLabelsToSheet(oldDescriptions);
+      removeLabelsBackup(ss);
+    }],
+    ['adding the Start Here sheet', function() { ensureStartHereSheet(ss); }]
+  ];
+  for (var i = 0; i < steps.length; i++) {
+    try {
+      steps[i][1]();
+      SpreadsheetApp.flush();
+    } catch (e) {
+      ui.alert('Setup paused',
+        'Google stopped responding while ' + steps[i][0] + ':\n' + e.message + '\n\n' +
+        'Nothing has been lost. Wait a minute, then run Email Sorter > Set up / upgrade again; ' +
+        'it carries on from where it stopped.', ui.ButtonSet.OK);
+      return;
+    }
+  }
 
   if (!getApiKey()) setApiKeyFromMenu();
   installTrigger_();

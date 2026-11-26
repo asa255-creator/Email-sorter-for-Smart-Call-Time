@@ -12,6 +12,9 @@
 var LABELS_HEADER = ['Label', 'What belongs here (Claude reads this)', 'Inbox action',
   'Archive after (days)', 'Claude can choose it', 'Notes'];
 var V1_SHEETS = ['Queue', 'Instructions'];
+// While upgrading, the v1 Labels sheet is kept under this name until the new one is filled in,
+// so an interrupted upgrade never loses your label descriptions.
+var LABELS_BACKUP = 'Labels (old)';
 
 function headerStyle_(range, color) {
   range.setFontWeight('bold').setBackground(color).setFontColor('white');
@@ -72,10 +75,12 @@ function ensureConfigSheet(ss) {
     return [d[0], value, d[2]];
   }).concat(extraRows);
 
-  sheet.clear();
-  sheet.getRange(1, 1, 1, 3).setValues([['Setting', 'Value', 'What it does']]);
+  // Overwrite in place, then clear what's left below, so an interruption never leaves an empty sheet.
+  var all = [['Setting', 'Value', 'What it does']].concat(rows);
+  var last = sheet.getLastRow();
+  sheet.getRange(1, 1, all.length, 3).setValues(all);
+  if (last > all.length) sheet.getRange(all.length + 1, 1, last - all.length, 3).clearContent();
   headerStyle_(sheet.getRange(1, 1, 1, 3), '#5f6368');
-  sheet.getRange(2, 1, rows.length, 3).setValues(rows);
   sheet.getRange(2, 1, rows.length, 1).setFontWeight('bold');
   sheet.getRange(2, 2, rows.length, 1).setNumberFormat('@');
   sheet.setColumnWidth(1, 170);
@@ -93,27 +98,20 @@ function ensureConfigSheet(ss) {
 // ============================================================================
 
 /**
- * Creates the Labels sheet, or rebuilds a v1 one. Returns the old
- * descriptions (lower-case name -> text) so syncLabelsToSheet can keep them.
+ * Creates the Labels sheet, or upgrades a v1 one. The v1 sheet is renamed
+ * to LABELS_BACKUP rather than cleared, and its descriptions are returned
+ * (lower-case name -> text) for syncLabelsToSheet. Running this again after
+ * an interruption picks the descriptions up from the backup.
  */
 function ensureLabelsSheet(ss, notes) {
   var sheet = ss.getSheetByName('Labels');
-  var oldDescriptions = {};
-  if (sheet && sheet.getLastRow() >= 1) {
-    var width = Math.max(sheet.getLastColumn(), 1);
-    var header = sheet.getRange(1, 1, 1, width).getValues()[0];
-    if (String(header[1] || '').trim() !== LABELS_HEADER[1]) {
-      // v1 layout: A = name, E = description.
-      if (sheet.getLastRow() > 1 && width >= 5) {
-        sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues().forEach(function(r) {
-          if (r[0] && r[4]) oldDescriptions[String(r[0]).toLowerCase()] = String(r[4]);
-        });
-      }
-      sheet.getDataRange().clearDataValidations();
-      sheet.clear();
-      sheet = null;
-      if (notes) notes.push('Rebuilt the Labels sheet with an Inbox action column. Your label descriptions were kept.');
-    }
+  if (sheet && sheet.getLastRow() >= 1 &&
+      String(sheet.getRange(1, 2).getValue() || '').trim() !== LABELS_HEADER[1]) {
+    var stale = ss.getSheetByName(LABELS_BACKUP);
+    if (stale) ss.deleteSheet(stale);
+    sheet.setName(LABELS_BACKUP);
+    sheet = null;
+    if (notes) notes.push('Rebuilt the Labels sheet with an Inbox action column. Your label descriptions were kept.');
   }
   if (!sheet) sheet = ss.getSheetByName('Labels') || ss.insertSheet('Labels');
   if (sheet.getLastRow() === 0) {
@@ -121,7 +119,23 @@ function ensureLabelsSheet(ss, notes) {
   }
   headerStyle_(sheet.getRange(1, 1, 1, LABELS_HEADER.length), '#1a73e8');
   sheet.setFrozenRows(1);
-  return oldDescriptions;
+  return readV1Descriptions_(ss.getSheetByName(LABELS_BACKUP));
+}
+
+/** Label descriptions from a v1 Labels sheet (A = name, E = description). */
+function readV1Descriptions_(sheet) {
+  var out = {};
+  if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < 5) return out;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues().forEach(function(r) {
+    if (r[0] && r[4]) out[String(r[0]).toLowerCase()] = String(r[4]);
+  });
+  return out;
+}
+
+/** Deletes the v1 Labels backup once the new Labels sheet has been filled in. */
+function removeLabelsBackup(ss) {
+  var backup = ss.getSheetByName(LABELS_BACKUP);
+  if (backup) ss.deleteSheet(backup);
 }
 
 function readLabelRows_(sheet) {
@@ -196,7 +210,8 @@ function syncLabelsToSheet(oldDescriptions) {
     if (systemKeys.indexOf(key) >= 0) return;
     var prev = existing[key];
     rows.push(prev
-      ? [gmail[key], prev[1], prev[2] || ACTIONS.KEEP, prev[3], prev[4] === '' ? true : isChecked_(prev[4]), '']
+      ? [gmail[key], prev[1] || oldDescriptions[key] || '', prev[2] || ACTIONS.KEEP, prev[3],
+        prev[4] === '' ? true : isChecked_(prev[4]), '']
       : [gmail[key], oldDescriptions[key] || '', ACTIONS.KEEP, '', true, '']);
   });
   // Labels you typed into the sheet that Gmail doesn't have yet.
@@ -293,11 +308,15 @@ function ensureSendersSheet(ss) {
   return true;
 }
 
+function isCurrentLog_(sheet) {
+  return !!sheet && String(sheet.getRange(1, 4).getValue()) === LOG_HEADER[3];
+}
+
 function ensureLogSheet(ss) {
   var sheet = ss.getSheetByName('Log');
-  if (sheet && String(sheet.getRange(1, 4).getValue()) === LOG_HEADER[3]) return;
-  if (!sheet) sheet = ss.insertSheet('Log');
-  sheet.clear();
+  if (isCurrentLog_(sheet)) return;
+  if (sheet) ss.deleteSheet(sheet);   // an old-format log: nothing in it is needed
+  sheet = ss.insertSheet('Log');
   sheet.getRange(1, 1, 1, LOG_HEADER.length).setValues([LOG_HEADER]);
   headerStyle_(sheet.getRange(1, 1, 1, LOG_HEADER.length), '#d93025');
   sheet.setFrozenRows(1);
@@ -342,15 +361,21 @@ function ensureStartHereSheet(ss) {
   return sheet;
 }
 
-/** Deletes the v1 sheets the sorter no longer uses. Returns their names. */
+/**
+ * Deletes the v1 sheets the sorter no longer uses: Queue (it kept copies of
+ * email bodies), Instructions, and the old-format Log (v1 never trimmed it).
+ * Done first during an upgrade, because a large old file is what makes
+ * Google Sheets time out. Returns their names.
+ */
 function removeV1Sheets(ss) {
   var removed = [];
-  V1_SHEETS.forEach(function(name) {
+  V1_SHEETS.concat(['Log']).forEach(function(name) {
     var sheet = ss.getSheetByName(name);
-    if (sheet && ss.getSheets().length > 1) {
-      ss.deleteSheet(sheet);
-      removed.push(name);
-    }
+    if (!sheet || ss.getSheets().length <= 1) return;
+    if (name === 'Log' && isCurrentLog_(sheet)) return;
+    ss.deleteSheet(sheet);
+    SpreadsheetApp.flush();
+    removed.push(name === 'Log' ? 'old Log' : name);
   });
   return removed;
 }
