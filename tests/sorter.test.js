@@ -581,3 +581,26 @@ test('Preview shows what would happen without changing Gmail or learning; Re-sor
   assert.equal(gmail.thread('ci').inbox, false);
   assert.match(ui.alerts[ui.alerts.length - 1].message, /2 conversations queued; 2 sorted/);
 });
+
+test('mark_read_after_days marks old unread mail read, but not a conversation with a newer reply', () => {
+  const w = upgradedWorld(() => claudeOk({}));
+  const { ctx: S, gmail, ss } = w;
+  gmail.addThread('stale', [{ from: 'a@x.com', to: ME, subject: 'Old', date: ago(10 * DAY) }], { labels: ['_sorted'], inbox: false });
+  gmail.addThread('stale-inbox', [{ from: 'b@x.com', to: ME, subject: 'Old too', date: ago(8 * DAY) }], { labels: ['_sorted'] });
+  gmail.addThread('fresh-reply', [
+    { from: 'c@x.com', to: ME, subject: 'Thread', date: ago(9 * DAY) },
+    { from: 'c@x.com', to: ME, subject: 'Re: Thread', date: ago(2 * DAY) }], { labels: ['_sorted'] });
+  gmail.addThread('recent', [{ from: 'd@x.com', to: ME, subject: 'New', date: ago(3 * DAY) }], { labels: ['_sorted'] });
+
+  S.runSorter_({ forceSweep: true });
+  assert.ok(['stale', 'stale-inbox', 'fresh-reply', 'recent'].every((id) => gmail.thread(id).unread), 'off by default');
+
+  S.setConfig('mark_read_after_days', '7');
+  S.runSorter_({ forceSweep: true });
+  assert.equal(gmail.thread('stale').unread, false, 'archived mail too');
+  assert.equal(gmail.thread('stale-inbox').unread, false);
+  assert.equal(gmail.thread('stale-inbox').inbox, true, 'only marked read, not archived');
+  assert.equal(gmail.thread('fresh-reply').unread, true, 'a newer reply keeps it unread');
+  assert.equal(gmail.thread('recent').unread, true);
+  assert.match(ss.getSheetByName('Log').data(7)[0][6], /Marked 2 conversations read that had been unread for over 7 days/);
+});

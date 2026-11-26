@@ -70,6 +70,9 @@ var DEFAULT_CONFIG = [
     'Most conversations sorted per run.'],
   ['backfill_days', '14',
     'Unsorted inbox mail older than this many days is left alone. Raise it once to clean up an old inbox (costs more).'],
+  ['mark_read_after_days', '',
+    'Mark any email that is still unread after this many days as read, everywhere in Gmail (inbox and labels). ' +
+    'For example 7. Leave blank to turn it off. Checked once an hour; it never archives or relabels anything.'],
   ['learn_after', '3',
     'After Claude sorts an automated or bulk sender the same way this many times, their mail is sorted from memory without asking Claude.'],
   ['auto_create_labels', 'yes',

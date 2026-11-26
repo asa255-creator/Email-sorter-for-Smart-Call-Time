@@ -241,6 +241,7 @@ class FakeGmail {
   createLabel(name) { return this.label(name); }
   getAliases() { return []; }
   getThreadById(id) { return this.thread(id) || null; }
+  markThreadsRead(threads) { threads.forEach((t) => t.markRead()); return this; }
   search(query, start, max) {
     this.searches.push(query);
     const matches = this.threads.filter((t) => this.matches(t, query))
@@ -255,6 +256,9 @@ class FakeGmail {
     if (/-in:sent\b/.test(q) && thread.messages.every((m) => m.getFrom().toLowerCase().includes(this.me))) return false;
     const newer = q.match(/newer_than:(\d+)d/);
     if (newer && Date.now() - thread.getLastMessageDate().getTime() > Number(newer[1]) * DAY) return false;
+    if (/(^|\s)is:unread\b/.test(q) && !thread.unread) return false;
+    const older = q.match(/older_than:(\d+)d/);
+    if (older && !thread.messages.some((m) => Date.now() - m.getDate().getTime() > Number(older[1]) * DAY)) return false;
     const after = q.match(/after:(\d+)/);
     if (after && thread.getLastMessageDate().getTime() < Number(after[1]) * 1000) return false;
     for (const m of q.matchAll(/(-?)label:([^\s)]+)/g)) {

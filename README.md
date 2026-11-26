@@ -61,6 +61,8 @@ Gmail alerts your phone the moment an email arrives, before the sorter sees it, 
 - **Email Sorter → Re-sort inbox** then sorts the conversations already in your inbox again, with your current descriptions and rules. It adds labels and applies inbox actions, but never removes a label. It works through them a batch at a time; watch the Log sheet.
 - Emails you send yourself don't make a good test, because mail from you is always kept.
 
+To clear old unread counts, set `mark_read_after_days` on the Config sheet (for example `7`). Once an hour, any conversation whose newest message has been unread longer than that is marked read, in the inbox and in your labels. It never archives or relabels anything. Leave it blank to turn it off.
+
 ## How it learns
 
 There is no hidden model. Everything it learns is a row you can read and edit.

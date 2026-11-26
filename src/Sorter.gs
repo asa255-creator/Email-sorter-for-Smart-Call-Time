@@ -44,6 +44,7 @@ function runSorter_(opts) {
     processInbox_(run, work.inbox);
     if (sweepDue) {
       sweepDue_(run);
+      markOldUnreadRead(run);
       checkRelabels(run);
       setStatus('last_sweep', run.now);
     }
@@ -462,6 +463,38 @@ function sweepDue_(run) {
     logEvent(run, 'Cleanup', 'Archived: its time in the inbox was up.', id, thread.getFirstMessageSubject());
   });
   pruneState(run.state, run.now);
+}
+
+// ============================================================================
+// MARK OLD UNREAD MAIL READ (mark_read_after_days)
+// ============================================================================
+
+/**
+ * Marks conversations read when their newest message is older than
+ * mark_read_after_days and they are still unread. A conversation with a
+ * newer unread reply is left alone.
+ */
+function markOldUnreadRead(run) {
+  var days = parseInt(getConfig('mark_read_after_days'), 10);
+  if (!(days > 0)) return 0;
+  var cutoff = run.now - days * DAY_MS;
+  var query = 'is:unread older_than:' + days + 'd -in:spam -in:trash -in:chats';
+  var marked = 0;
+  var start = 0;
+  for (var batch = 0; batch < 10 && timeLeft_(run); batch++) {
+    var threads = GmailApp.search(query, start, 100);
+    if (!threads.length) break;
+    var old = threads.filter(function(t) { return t.getLastMessageDate().getTime() < cutoff; });
+    if (old.length) GmailApp.markThreadsRead(old);
+    marked += old.length;
+    start += threads.length - old.length; // marked ones drop out of the results; skip the rest
+  }
+  if (marked) {
+    logEvent(run, 'Cleanup', 'Marked ' + marked + ' conversation' + (marked === 1 ? '' : 's') +
+      ' read that had been unread for over ' + days + ' days.');
+  }
+  run.stats.markedRead = (run.stats.markedRead || 0) + marked;
+  return marked;
 }
 
 // ============================================================================
