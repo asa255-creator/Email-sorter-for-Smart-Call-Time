@@ -47,13 +47,13 @@ The Rules sheet starts with these. The first rule that matches wins.
 | Anything from Sentry | Your warnings label (an existing label starting with "Warnings" is used), kept in the inbox |
 | A failed GitHub Actions run (`[org/repo] Run failed: …`) | Kept for a day, then archived |
 | GitHub review request, @mention, team mention, assignment, security alert | Kept in the inbox |
-| Successful CI runs, pushes, threads you only watch, merges/closes | Archived right away, left unread |
+| Successful CI runs, pushes, threads you only watch, merges/closes | Archived and marked read right away |
 | Comments on your PRs and issues | Kept for 2 days, then archived |
 | Anything else from `notifications@github.com` | Kept for 2 days, then archived |
 
 GitHub rules use the reason address GitHub puts in Cc (for example `ci_activity@noreply.github.com`). If you reply to a notification, its scheduled archive is cancelled.
 
-Gmail alerts your phone the moment an email arrives, before the sorter sees it, so you still get alerts for mail that is then filed. Set `run_every_minutes` to 1 on the Config sheet to file it within a minute (then choose **Resume automatic sorting**). Once filed, your phone may clear the notification.
+Gmail chimes on your phone the moment an email arrives, before the sorter sees it, so you still get the chime for mail that is then archived and marked read. Set `run_every_minutes` to 1 on the Config sheet to clear it within a minute (then choose **Resume automatic sorting**).
 
 ## Trying it out safely
 

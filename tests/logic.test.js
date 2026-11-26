@@ -84,12 +84,11 @@ test('default GitHub rules split notifications by reason', () => {
   const failed = gh('ci_activity', '[org/repo] Run failed: Integration Tests');
   assert.equal(failed.action, S.ACTIONS.ARCHIVE_LATER, 'failed runs stay visible for a day');
   assert.equal(failed.days, 1);
-  assert.equal(gh('ci_activity', '[org/repo] Run succeeded: Deploy Dev').action, S.ACTIONS.ARCHIVE,
-    'filed right away but left unread');
+  assert.equal(gh('ci_activity', '[org/repo] Run succeeded: Deploy Dev').action, S.ACTIONS.ARCHIVE_READ);
   assert.equal(gh('review_requested').action, S.ACTIONS.KEEP);
   assert.equal(gh('mention').action, S.ACTIONS.KEEP);
-  assert.equal(gh('ci_activity').action, S.ACTIONS.ARCHIVE);
-  assert.equal(gh('subscribed').action, S.ACTIONS.ARCHIVE);
+  assert.equal(gh('ci_activity').action, S.ACTIONS.ARCHIVE_READ);
+  assert.equal(gh('subscribed').action, S.ACTIONS.ARCHIVE_READ);
   assert.equal(gh('comment').action, S.ACTIONS.ARCHIVE_LATER);
   assert.equal(gh('comment').days, 2);
   assert.equal(gh('').note, 'Any other GitHub notification');

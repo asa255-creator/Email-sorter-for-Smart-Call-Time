@@ -63,8 +63,8 @@ var DEFAULT_RULES = [
     'GitHub', ACTIONS.KEEP, '', 'GitHub needs you: review requests, @mentions, assignments, security alerts'],
   [true, 'Cc', 'ci_activity@noreply.github.com | push@noreply.github.com | subscribed@noreply.github.com | ' +
     'state_change@noreply.github.com | your_activity@noreply.github.com',
-    'GitHub', ACTIONS.ARCHIVE, '', 'Successful CI runs, pushes, watched threads: filed right away and left unread. ' +
-    'Your phone still alerts when they arrive.'],
+    'GitHub', ACTIONS.ARCHIVE_READ, '', 'Successful CI runs, pushes, watched threads: archived and marked read. ' +
+    'Your phone still chimes when they arrive.'],
   [true, 'Cc', 'comment@noreply.github.com | author@noreply.github.com | manual@noreply.github.com',
     'GitHub', ACTIONS.ARCHIVE_LATER, 2, 'Comments on your PRs and issues: visible for 2 days, then archived'],
   [true, 'From', 'notifications@github.com',

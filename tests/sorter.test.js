@@ -140,7 +140,7 @@ test('a full run sorts GitHub, people, sales sequences and newsletters correctly
 
   // GitHub: rules, no Claude.
   assert.equal(gmail.thread('gh-ci').inbox, false);
-  assert.equal(gmail.thread('gh-ci').unread, true, 'CI runs are filed but left unread');
+  assert.equal(gmail.thread('gh-ci').unread, false, 'CI runs are archived and marked read');
   assert.ok(gmail.thread('gh-ci').labels.has('GitHub'));
   assert.ok(gmail.thread('gh-ci').labels.has('Sorter/Archived'));
   assert.equal(gmail.thread('gh-review').inbox, true);
@@ -577,7 +577,7 @@ test('Preview shows what would happen without changing Gmail or learning; Re-sor
   const oldRow = preview.find((r) => r[1] === 'Issue 41');
   assert.deepEqual(oldRow.slice(2, 6), ['Clients', 'Newsletters', 'Archive', 'Claude']);
   const ciRow = preview.find((r) => /Run succeeded/.test(r[1]));
-  assert.deepEqual(ciRow.slice(3, 6), ['GitHub', 'Archive', 'Rule']);
+  assert.deepEqual(ciRow.slice(3, 6), ['GitHub', 'Archive + mark read', 'Rule']);
   assert.match(ui.alerts[ui.alerts.length - 1].message, /2 would leave the inbox/);
   // Nothing changed.
   assert.equal(gmail.thread('old').inbox, true);
