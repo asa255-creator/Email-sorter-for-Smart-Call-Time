@@ -6,6 +6,8 @@ function onOpen() {
   var ui = SpreadsheetApp.getUi();
   ui.createMenu('Email Sorter')
     .addItem('Sort now', 'sortNowFromMenu')
+    .addItem('Preview sorting (changes nothing)…', 'previewSort')
+    .addItem('Re-sort inbox…', 'resortInbox')
     .addItem('Status', 'showStatus')
     .addSeparator()
     .addItem('Suggest labels from my mail…', 'suggestLabels')

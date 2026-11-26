@@ -55,6 +55,12 @@ GitHub rules use the reason address GitHub puts in Cc (for example `ci_activity@
 
 Gmail alerts your phone the moment an email arrives, before the sorter sees it, so you still get alerts for mail that is then filed. Set `run_every_minutes` to 1 on the Config sheet to file it within a minute (then choose **Resume automatic sorting**). Once filed, your phone may clear the notification.
 
+## Trying it out safely
+
+- **Email Sorter → Preview sorting (changes nothing)** runs the sorter's decisions on the 50 newest inbox conversations, including ones already sorted, and lists on a Preview sheet the labels each would get, what would happen to it, and why. Rows whose labels would change are highlighted. Nothing in Gmail changes and nothing is learned. It costs about 2 cents with Haiku.
+- **Email Sorter → Re-sort inbox** then sorts the conversations already in your inbox again, with your current descriptions and rules. It adds labels and applies inbox actions, but never removes a label. It works through them a batch at a time; watch the Log sheet.
+- Emails you send yourself don't make a good test, because mail from you is always kept.
+
 ## How it learns
 
 There is no hidden model. Everything it learns is a row you can read and edit.

@@ -545,3 +545,39 @@ test('"Keep in inbox + mark read" marks it read and leaves it in the inbox', () 
   assert.equal(gmail.thread('digest').unread, false);
   assert.equal(ss.getSheetByName('Log').data(7)[0][5], 'Kept + read');
 });
+
+test('Preview shows what would happen without changing Gmail or learning; Re-sort then applies it', () => {
+  let calls = 0;
+  const w = upgradedWorld(() => {
+    calls++;
+    return claudeOk({ reason: 'Weekly digest.', sender_type: 'bulk', labels: ['Newsletters'], needs_attention: false,
+      confidence: 'high', new_label: '', new_label_description: '' });
+  });
+  const { ss, ctx: S, gmail, ui } = w;
+  // Already sorted by the old version, with a wrong label, still in the inbox.
+  gmail.addThread('old', [{ from: 'news@weekly-digest.com', to: ME, subject: 'Issue 41', date: ago(DAY) }],
+    { labels: ['Clients', '_sorted'] });
+  gmail.addThread('ci', [{ from: 'GitHub <notifications@github.com>', to: ME, subject: '[o/r] Run succeeded: CI',
+    cc: 'ci_activity@noreply.github.com', date: ago(HOUR) }], { labels: ['_sorted'] });
+  setLabelAction(ss, 'Newsletters', 'Archive');
+  const sendersBefore = ss.getSheetByName('Senders').getLastRow();
+
+  S.previewSort();
+  const preview = ss.getSheetByName('Preview').data(7);
+  const oldRow = preview.find((r) => r[1] === 'Issue 41');
+  assert.deepEqual(oldRow.slice(2, 6), ['Clients', 'Newsletters', 'Archive', 'Claude']);
+  const ciRow = preview.find((r) => /Run succeeded/.test(r[1]));
+  assert.deepEqual(ciRow.slice(3, 6), ['GitHub', 'Archive', 'Rule']);
+  assert.match(ui.alerts[ui.alerts.length - 1].message, /2 would leave the inbox/);
+  // Nothing changed.
+  assert.equal(gmail.thread('old').inbox, true);
+  assert.ok(!gmail.thread('old').labels.has('Newsletters'));
+  assert.equal(ss.getSheetByName('Senders').getLastRow(), sendersBefore, 'nothing learned');
+
+  S.resortInbox();
+  assert.ok(gmail.thread('old').labels.has('Newsletters'), 'new label added');
+  assert.ok(gmail.thread('old').labels.has('Clients'), 'old label left alone');
+  assert.equal(gmail.thread('old').inbox, false);
+  assert.equal(gmail.thread('ci').inbox, false);
+  assert.match(ui.alerts[ui.alerts.length - 1].message, /2 conversations queued; 2 sorted/);
+});

@@ -20,7 +20,7 @@ class FormatRange {
   constructor() {
     const self = this;
     ['setFontWeight', 'setBackground', 'setFontColor', 'setFontSize', 'setWrap', 'setNumberFormat',
-      'setNote', 'setDataValidation', 'clearDataValidations', 'insertCheckboxes'].forEach((m) => {
+      'setNote', 'setDataValidation', 'clearDataValidations', 'insertCheckboxes', 'setBackgrounds'].forEach((m) => {
       self[m] = () => self;
     });
   }
@@ -172,6 +172,7 @@ class FakeLabel {
   getThreads(start, max) {
     return this.gmail.threads.filter((t) => t.labels.has(this.name)).slice(start, start + max);
   }
+  removeFromThreads(threads) { threads.forEach((t) => t.labels.delete(this.name)); return this; }
 }
 
 class FakeMessage {

@@ -270,6 +270,21 @@ function sortThread_(run, thread, sortedBefore) {
     return null;
   }
 
+  var result = decideThread_(run, f, true);
+  var decision = result.decision;
+  var answer = result.answer;
+  applyDecision_(run, thread, f, decision);
+  watchLabel(run, thread, f, decision);
+  logDecision(run, f, decision);
+  if (answer && answer.ai.new_label) considerLabelIdea(run, answer.ai, f);
+  return decision;
+}
+
+/**
+ * Decides what to do with a conversation. Shared by sorting and Preview.
+ * With `remember` false nothing is learned (Preview must not change anything).
+ */
+function decideThread_(run, f, remember) {
   var email = f.senderEmail;
   var knownContact = f.allFromYou ? true : isKnownContact(run.senders, email, run.mine, run.now);
   // A relay address with no Reply-To (e.g. a Docs share) stands for many people: never learn it.
@@ -285,30 +300,25 @@ function sortThread_(run, thread, sortedBefore) {
     reviewLabel: run.reviewLabel
   };
 
+  var answer = null;
   var decision = decideWithoutClaude(ctx);
   if (decision) {
     if (decision.by === 'rule') run.stats.rules++;
     if (decision.by === 'memory') run.stats.memory++;
-    if (email) touchSender(run.senders, email, run.now);
   } else {
     if (run.claudeBlocked) {
       var skip = new Error(run.claudeBlocked);
       skip.kind = 'skip';
       throw skip;
     }
-    var answer = classifyWithClaude(f, knownContact, getPrompt_(run));
+    answer = classifyWithClaude(f, knownContact, getPrompt_(run));
     run.stats.claude++;
     run.stats.cost += answer.cost || 0;
     decision = decideFromClaude(ctx, answer.ai);
-    if (learnable) rememberClaudeDecision(run.senders, email, decision);
-    if (email) touchSender(run.senders, email, run.now);
+    if (remember && learnable) rememberClaudeDecision(run.senders, email, decision);
   }
-
-  applyDecision_(run, thread, f, decision);
-  watchLabel(run, thread, f, decision);
-  logDecision(run, f, decision);
-  if (answer && answer.ai.new_label) considerLabelIdea(run, answer.ai, f);
-  return decision;
+  if (remember && email) touchSender(run.senders, email, run.now);
+  return { decision: decision, answer: answer };
 }
 
 /** Why a sender must never be archived, if they must not. */
