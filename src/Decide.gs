@@ -141,9 +141,12 @@ function resolveAction_(decision, labels) {
   return decision;
 }
 
-/** The least aggressive action among the labels (no labels, or a label with no settings: keep). */
+/**
+ * The least aggressive action among the labels (no labels, or a label with no settings: keep).
+ * Gentlest first: keep, keep + mark read, archive later, archive, archive + mark read.
+ */
 function combineLabelActions(names, labels) {
-  var order = [ACTIONS.KEEP, ACTIONS.ARCHIVE_LATER, ACTIONS.ARCHIVE, ACTIONS.ARCHIVE_READ];
+  var order = [ACTIONS.KEEP, ACTIONS.KEEP_READ, ACTIONS.ARCHIVE_LATER, ACTIONS.ARCHIVE, ACTIONS.ARCHIVE_READ];
   if (!names.length) return { action: ACTIONS.KEEP, days: null };
   var rank = order.length - 1;
   var days = null;

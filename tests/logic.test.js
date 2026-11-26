@@ -106,6 +106,8 @@ test('rules skip disabled and incomplete rows; actions are normalised', () => {
   assert.equal(rules[0].action, S.ACTIONS.ARCHIVE);
   assert.deepEqual(plain(S.matchRule(rules, features({ subject: 'Your RECEIPT from Acme' })).labels), ['Finance']);
   assert.equal(S.normalizeAction('archive + mark read'), S.ACTIONS.ARCHIVE_READ);
+  assert.equal(S.normalizeAction('Keep in inbox + mark read'), S.ACTIONS.KEEP_READ);
+  assert.equal(S.normalizeAction('mark read'), S.ACTIONS.KEEP_READ, 'mark read alone never archives');
   assert.equal(S.normalizeAction('nonsense'), '');
 });
 
@@ -367,6 +369,9 @@ test('label lists: split, join, leaves and combined inbox action', () => {
   assert.deepEqual(combine(['a', 'd']), { action: 'Keep in inbox', days: null }, 'any keep label keeps it');
   assert.deepEqual(combine(['a', 'unknown']), { action: 'Keep in inbox', days: null });
   assert.deepEqual(combine([]), { action: 'Keep in inbox', days: null });
+  labels.r = { action: 'Keep in inbox + mark read' };
+  assert.deepEqual(combine(['a', 'r']), { action: 'Keep in inbox + mark read', days: null }, 'mark read beats archive');
+  assert.deepEqual(combine(['r', 'd']), { action: 'Keep in inbox', days: null }, 'plain keep beats mark read');
 });
 
 test('an email can get a topic label and an urgency label; it stays in the inbox if either says keep', () => {

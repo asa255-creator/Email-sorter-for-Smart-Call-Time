@@ -17,6 +17,7 @@ function describeInbox(decision) {
   switch (decision.action) {
     case ACTIONS.ARCHIVE: return 'Archived';
     case ACTIONS.ARCHIVE_READ: return 'Archived + read';
+    case ACTIONS.KEEP_READ: return 'Kept + read';
     case ACTIONS.ARCHIVE_LATER: return 'Archive in ' + decision.days + ' day' + (decision.days === 1 ? '' : 's');
     default: return 'Kept';
   }

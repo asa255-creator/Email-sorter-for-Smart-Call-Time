@@ -348,6 +348,9 @@ function applyDecision_(run, thread, f, d) {
 
   if (d.action === ACTIONS.ARCHIVE) {
     archiveThread_(run, thread, id, false);
+  } else if (d.action === ACTIONS.KEEP_READ) {
+    thread.markRead();
+    run.stats.kept++;
   } else if (d.action === ACTIONS.ARCHIVE_READ) {
     archiveThread_(run, thread, id, true);
   } else if (d.action === ACTIONS.ARCHIVE_LATER) {

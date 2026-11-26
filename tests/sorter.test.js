@@ -533,3 +533,15 @@ test('Claude can give an email several labels, and your rules and sender choices
   const log = ss.getSheetByName('Log').data(7).find((r) => r[2] === 'Sign by Friday');
   assert.equal(log[4], 'Clients, Newsletters');
 });
+
+test('"Keep in inbox + mark read" marks it read and leaves it in the inbox', () => {
+  const w = upgradedWorld(() => claudeOk({ reason: 'Digest.', sender_type: 'bulk', labels: ['Newsletters'],
+    needs_attention: false, confidence: 'high', new_label: '', new_label_description: '' }));
+  const { ss, ctx: S, gmail } = w;
+  setLabelAction(ss, 'Newsletters', 'Keep in inbox + mark read');
+  gmail.addThread('digest', [{ from: 'news@weekly-digest.com', to: ME, subject: 'This week', date: ago(HOUR) }]);
+  S.runSorter();
+  assert.equal(gmail.thread('digest').inbox, true);
+  assert.equal(gmail.thread('digest').unread, false);
+  assert.equal(ss.getSheetByName('Log').data(7)[0][5], 'Kept + read');
+});

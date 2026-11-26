@@ -31,6 +31,7 @@ For automated and bulk mail, what happens next is the **Inbox action** of the la
 | Inbox action | Effect |
 |---|---|
 | Keep in inbox | Labelled, stays put (the default for every label) |
+| Keep in inbox + mark read | Labelled, stays in the inbox, marked read |
 | Archive | Labelled and archived |
 | Archive + mark read | Labelled, archived, marked read |
 | Archive after days | Stays for N days, then archived |

@@ -140,7 +140,7 @@ function normalizeAction(value) {
   }
   if (v === 'keep') return ACTIONS.KEEP;
   if (v === 'archive') return ACTIONS.ARCHIVE;
-  if (v.indexOf('read') >= 0) return ACTIONS.ARCHIVE_READ;
+  if (v.indexOf('read') >= 0) return v.indexOf('archive') >= 0 ? ACTIONS.ARCHIVE_READ : ACTIONS.KEEP_READ;
   if (v.indexOf('after') >= 0 || v.indexOf('later') >= 0) return ACTIONS.ARCHIVE_LATER;
   return '';
 }

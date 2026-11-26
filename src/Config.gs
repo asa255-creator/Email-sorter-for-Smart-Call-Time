@@ -12,11 +12,12 @@ var SORTER_VERSION = '2.0.0';
 // What happens to a conversation after it is sorted.
 var ACTIONS = {
   KEEP: 'Keep in inbox',
+  KEEP_READ: 'Keep in inbox + mark read',
   ARCHIVE: 'Archive',
   ARCHIVE_READ: 'Archive + mark read',
   ARCHIVE_LATER: 'Archive after days'
 };
-var ACTION_LIST = [ACTIONS.KEEP, ACTIONS.ARCHIVE, ACTIONS.ARCHIVE_READ, ACTIONS.ARCHIVE_LATER];
+var ACTION_LIST = [ACTIONS.KEEP, ACTIONS.KEEP_READ, ACTIONS.ARCHIVE_LATER, ACTIONS.ARCHIVE, ACTIONS.ARCHIVE_READ];
 
 // The kinds of sender Claude can say an email came from.
 var SENDER_TYPES = ['person', 'cold_outreach', 'automated', 'bulk'];

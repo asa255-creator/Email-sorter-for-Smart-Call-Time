@@ -239,6 +239,7 @@ function syncLabelsToSheet(oldDescriptions) {
   }));
   sheet.getRange(2, 3, rows.length, 1).setDataValidation(actionValidation_());
   sheet.getRange(2, 5, rows.length, 1).setDataValidation(checkboxValidation_());
+  refreshActionDropdowns(ss);
   sheet.setColumnWidth(1, 200);
   sheet.setColumnWidth(2, 460);
   sheet.setColumnWidth(3, 170);
@@ -247,6 +248,14 @@ function syncLabelsToSheet(oldDescriptions) {
   sheet.setColumnWidth(6, 260);
   sheet.getRange('B:B').setWrap(true);
   return rows.length;
+}
+
+/** Re-applies the Inbox action dropdowns on the Rules and Senders sheets, so new options show up. */
+function refreshActionDropdowns(ss) {
+  var rules = ss.getSheetByName('Rules');
+  if (rules) rules.getRange(2, 5, Math.max(rules.getLastRow(), 101) - 1, 1).setDataValidation(actionValidation_());
+  var senders = ss.getSheetByName('Senders');
+  if (senders) senders.getRange('C2:C').setDataValidation(actionValidation_());
 }
 
 /** Adds or updates one label's row (used for suggestions and labels the sorter creates). */

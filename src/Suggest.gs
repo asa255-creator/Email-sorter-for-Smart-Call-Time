@@ -69,6 +69,7 @@ var SUGGEST_SYSTEM_PROMPT = [
   '',
   'inbox_action is what happens to new mail with that label:',
   '- "Keep in inbox" for mail from people and anything the person must act on.',
+  '- "Keep in inbox + mark read" for things worth seeing in the inbox that never need to show as unread.',
   '- "Archive + mark read" for noise nobody reads.',
   '- "Archive" for mail worth keeping but not worth seeing.',
   '- "Archive after days" for mail that matters for a few days, like shipping updates or notifications; ' +
