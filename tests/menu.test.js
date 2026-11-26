@@ -44,11 +44,16 @@ test('every menu item runs on a fresh spreadsheet', () => {
   assert.equal(gmail.thread('r1').inbox, false, 'suggested sender archived from memory');
 
   S.showStatus();
-  assert.match(ui.alerts[ui.alerts.length - 1].message, /on, every 10 minutes/);
+  assert.match(ui.alerts[ui.alerts.length - 1].message, /on, every 5 min/);
 
   S.chooseModelFromMenu();
   assert.equal(S.getConfig('claude_model'), 'claude-haiku-5-5');
 
+  S.setConfig('run_every_minutes', '1');
+  S.resumeSorting();
+  assert.match(ui.alerts[ui.alerts.length - 1].message, /every 1 minute\./);
+  S.setConfig('run_every_minutes', '7');
+  assert.equal(S.runInterval_(), 5, 'rounded to an interval Apps Script allows');
   S.pauseSorting();
   assert.equal(triggers.length, 0);
   S.resumeSorting();

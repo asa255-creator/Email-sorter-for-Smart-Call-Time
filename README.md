@@ -2,7 +2,7 @@
 
 A Google Apps Script, attached to a Google Sheet, that keeps your Gmail inbox down to mail that needs you. It labels every new email and moves what you don't need to see out of the inbox.
 
-It runs every 10 minutes inside your own Google account. The only outside service it talks to is the Claude API.
+It runs every few minutes (1 to 30, your choice) inside your own Google account. The only outside service it talks to is the Claude API.
 
 ## How it decides
 
@@ -37,35 +37,48 @@ For automated and bulk mail, what happens next is the **Inbox action** of the la
 
 Two things keep an email in the inbox whatever its label says: Claude marks it as needing your attention (a failed payment, an unexpected security alert, a direct question), or Claude isn't sure. Unsure emails also get the `Needs Review` label.
 
-### GitHub
+### Rules that come built in
 
-The Rules sheet starts with five rules based on the reason address GitHub puts in Cc (for example `ci_activity@noreply.github.com`):
+The Rules sheet starts with these. The first rule that matches wins.
 
 | Notification | What happens |
 |---|---|
-| A failed Actions run (`[org/repo] Run failed: …`) | Kept for a day, then archived |
-| Review requested, @mention, team mention, assigned, security alert | Kept in the inbox |
-| Successful CI runs, pushes, threads you only watch, merges/closes | Archived and marked read |
+| Anything from Sentry | Your warnings label (an existing label starting with "Warnings" is used), kept in the inbox |
+| A failed GitHub Actions run (`[org/repo] Run failed: …`) | Kept for a day, then archived |
+| GitHub review request, @mention, team mention, assignment, security alert | Kept in the inbox |
+| Successful CI runs, pushes, threads you only watch, merges/closes | Archived right away, left unread |
 | Comments on your PRs and issues | Kept for 2 days, then archived |
 | Anything else from `notifications@github.com` | Kept for 2 days, then archived |
 
-If you reply to one, its scheduled archive is cancelled. To cut volume at the source, open GitHub → Settings → Notifications, set Actions emails to "only failed workflows", and unwatch repos you don't need.
+GitHub rules use the reason address GitHub puts in Cc (for example `ci_activity@noreply.github.com`). If you reply to a notification, its scheduled archive is cancelled.
 
-## Teaching it
+Gmail alerts your phone the moment an email arrives, before the sorter sees it, so you still get alerts for mail that is then filed. Set `run_every_minutes` to 1 on the Config sheet to file it within a minute (then choose **Resume automatic sorting**). Once filed, your phone may clear the notification.
 
-All of this works from Gmail, including on your phone:
+## How it learns
 
-- **Apply `Sorter/Always keep`** to an email. That sender is never archived again.
-- **Apply `Sorter/Always archive`** to an email. That sender is always archived and marked read. Use this for HubSpot-style mail that slips through.
-- **Move something from `Sorter/Archived` back to the inbox.** That sender's mail stays in the inbox from now on.
+There is no hidden model. Everything it learns is a row you can read and edit.
 
-Each of these becomes a row on the Senders sheet. The rows are also given to Claude as examples, so it treats similar senders the same way. You can edit the Senders sheet directly too: changing a Label, Inbox action or Type marks the row as your choice. A row for `@example.com` covers everyone at that domain.
+| You do this in Gmail | It learns |
+|---|---|
+| Change a label it chose (say Newsletters → Receipts) | Recorded on the **Corrections** sheet and shown to Claude as an example from then on. For automated and bulk senders (receipts, alerts, newsletters), that sender's future mail also goes straight to your label. People aren't locked to one label, since their mail varies. |
+| Apply `Sorter/Always keep` | That sender is never archived again |
+| Apply `Sorter/Always archive` | That sender is always archived and marked read, which is good for HubSpot-style mail that slips through |
+| Move something from `Sorter/Archived` back to the inbox | That sender's mail stays in the inbox from now on |
+| Nothing | After Claude sorts an automated sender the same way 3 times (`learn_after`), that sender is handled from memory, free |
 
-Everything the sorter archives carries the `Sorter/Archived` label, so you can always see what it moved. Every decision and its reason is on the Log sheet, and each subject there links to the email.
+Label changes are checked hourly, for conversations sorted in the last 7 days. Sender choices live on the **Senders** sheet, and editing a row there (Label, Inbox action or Type) makes it your choice. A row for `@example.com` covers everyone at that domain. Your choices and label changes are given to Claude as examples, so similar senders get the same treatment.
+
+Everything the sorter archives carries the `Sorter/Archived` label, and every decision and its reason is on the Log sheet; each subject there links to the email.
+
+## New labels and sub-labels
+
+The sorter can create labels on its own. When no label fits, Claude may suggest one, preferring a sub-label of one you already have (for example `Finance/Receipts` under `Finance`). The sorter creates it once the same suggestion comes up for 3 different emails (`new_label_after`). It then files those emails under it, adds it to the Labels sheet with Claude's description, and uses it from then on.
+
+New labels start as "Keep in inbox", so set their Inbox action when you see them; the Log says when one is created. **Status** lists suggestions still waiting for enough emails. Set `auto_create_labels` to `no` to only log the ideas.
 
 ## Choosing labels
 
-**Email Sorter → Suggest labels from my mail…** looks at the sender and subject (never the body) of up to 400 conversations from the last 60 days. It asks Claude for 5–15 labels with descriptions and inbox actions, plus which frequent senders belong in each, and writes them to a Suggestions sheet. Untick what you don't want, edit anything, then choose **Apply checked suggestions**.
+For a whole set at once, **Email Sorter → Suggest labels from my mail…** looks at the sender and subject (never the body) of up to 400 conversations from the last 60 days. It asks Claude for 5–15 labels, using sub-labels under your existing ones where they fit, with descriptions and inbox actions, plus which frequent senders belong in each. It writes them to a Suggestions sheet. Untick what you don't want, edit anything, then choose **Apply checked suggestions**.
 
 Claude only chooses labels ticked "Claude can choose it" on the Labels sheet. The description column is what Claude reads, so one clear sentence per label makes the biggest difference to accuracy. If you create labels in Gmail, run **Sync labels from Gmail** to add them.
 
@@ -99,7 +112,7 @@ Then open the sheet, refresh, and click **Email Sorter → Set up / upgrade**. I
 - switch older models to Claude Sonnet 5.5
 - remove the old Queue and Instructions sheets
 - create the Sorter labels in Gmail
-- start sorting every 10 minutes
+- start sorting every 5 minutes (change `run_every_minutes`)
 
 Next, set an Inbox action for each label, then **Sort now** and read the Log sheet.
 
@@ -125,6 +138,7 @@ Claude's answer is forced into a fixed format (structured outputs), so it can on
 | Labels | Each label's description, inbox action, archive-after days, and whether Claude can choose it |
 | Rules | Matches that run before Claude: a field (From, To, Cc, Subject, Body or any header name), text to look for (`a \| b` for either), and a label/action |
 | Senders | Sender memory: label, action, type, source (`you`, `rescued`, `suggested`, `claude`), and whether you have emailed them |
+| Corrections | Labels you changed in Gmail after the sorter chose them; shown to Claude as examples |
 | Log | Newest first: who, subject (linked), what decided it, label, what happened, why |
 | Config | Settings |
 

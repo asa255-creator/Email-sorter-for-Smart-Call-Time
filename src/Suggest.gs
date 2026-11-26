@@ -60,6 +60,10 @@ var SUGGEST_SYSTEM_PROMPT = [
   'Reuse existing labels where they fit: set already_exists to true and keep the exact name. Suggest new ' +
   'labels only for real gaps. Leave out existing labels that look unused or redundant.',
   '',
+  'Use sub-labels, written Parent/Child, to group related labels. Where the person already has a parent ' +
+  'label, put new labels for the same area under it (for example Work/Clients next to an existing Work/Tech). ' +
+  'Go at most two levels deep, and do not create a parent that would hold only one child.',
+  '',
   'Give every label a one-sentence description of what belongs in it, written so that another assistant can ' +
   'sort new email by it.',
   '',

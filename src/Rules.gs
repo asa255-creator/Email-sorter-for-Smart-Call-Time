@@ -12,7 +12,12 @@
 var RULES_HEADER = ['On', 'If this field', 'contains (use | for "or")', 'Label', 'Inbox action',
   'Archive after (days)', 'Note'];
 
+// The label "Warnings" is replaced at setup by your own warnings label if you have one.
+var WARNINGS_PLACEHOLDER = 'Warnings';
+
 var DEFAULT_RULES = [
+  [true, 'From', 'getsentry.com',
+    WARNINGS_PLACEHOLDER, ACTIONS.KEEP, '', 'Sentry error alerts and reports: always kept'],
   [true, 'Subject', '] run failed',
     'GitHub', ACTIONS.ARCHIVE_LATER, 1, 'Failed GitHub Actions runs: visible for a day, then archived'],
   [true, 'Cc', 'review_requested@noreply.github.com | mention@noreply.github.com | ' +
@@ -20,12 +25,25 @@ var DEFAULT_RULES = [
     'GitHub', ACTIONS.KEEP, '', 'GitHub needs you: review requests, @mentions, assignments, security alerts'],
   [true, 'Cc', 'ci_activity@noreply.github.com | push@noreply.github.com | subscribed@noreply.github.com | ' +
     'state_change@noreply.github.com | your_activity@noreply.github.com',
-    'GitHub', ACTIONS.ARCHIVE_READ, '', 'GitHub noise: successful CI runs, pushes, threads you only watch, merges/closes'],
+    'GitHub', ACTIONS.ARCHIVE, '', 'Successful CI runs, pushes, watched threads: filed right away and left unread. ' +
+    'Your phone still alerts when they arrive.'],
   [true, 'Cc', 'comment@noreply.github.com | author@noreply.github.com | manual@noreply.github.com',
     'GitHub', ACTIONS.ARCHIVE_LATER, 2, 'Comments on your PRs and issues: visible for 2 days, then archived'],
   [true, 'From', 'notifications@github.com',
     'GitHub', ACTIONS.ARCHIVE_LATER, 2, 'Any other GitHub notification']
 ];
+
+/** Default rules with the warnings placeholder swapped for an existing label like "Warnings (...)". */
+function defaultRulesFor(existingLabelNames) {
+  var warnings = (existingLabelNames || []).filter(function(n) { return /^warnings?\b/i.test(n); })
+    .sort(function(a, b) { return (a.split('/').length - b.split('/').length) || (a.length - b.length); })[0] ||
+    WARNINGS_PLACEHOLDER;
+  return DEFAULT_RULES.map(function(r) {
+    var row = r.slice();
+    if (row[3] === WARNINGS_PLACEHOLDER) row[3] = warnings;
+    return row;
+  });
+}
 
 /** Turns Rules sheet rows into rule objects. Rows with no field or match are skipped. */
 function parseRules(rows) {

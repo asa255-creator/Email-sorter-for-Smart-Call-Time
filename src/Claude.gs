@@ -34,9 +34,10 @@ var MODEL_PRICES = {
  *
  * @param {Object[]} labels       [{ name, description }]
  * @param {string}   notes        sorting_notes setting
- * @param {Object[]} corrections  [{ sender, choice, subject }]
+ * @param {Object[]} corrections  sender-level choices: [{ sender, choice, subject }]
+ * @param {Object[]} [relabels]   labels you changed in Gmail: [{ sender, subject, was, now }]
  */
-function buildClassifierSystemPrompt(labels, notes, corrections) {
+function buildClassifierSystemPrompt(labels, notes, corrections, relabels) {
   var lines = [
     'You sort incoming email for one person, using their own labels. For each email you get the sender, ' +
     'some facts about how it was sent, and the start of the latest message. Decide what kind of sender ' +
@@ -81,7 +82,13 @@ function buildClassifierSystemPrompt(labels, notes, corrections) {
     'confidence: high when both the sender type and the label are clear; medium when they are probably right; ' +
     'low when you are guessing. Low-confidence emails stay in the inbox for the person to check.',
     '',
-    'reason: one short sentence for the person\'s log saying what decided it.'
+    'reason: one short sentence for the person\'s log saying what decided it.',
+    '',
+    'new_label: usually an empty string. Fill it in only when no label fits well, or a more specific ' +
+    'sub-label clearly would, and more email like this is likely to keep coming. Prefer a sub-label of an ' +
+    'existing label, written Parent/Child (for example Finance/Receipts under Finance). Name a lasting ' +
+    'category, not a single conversation or person, and never suggest one for cold_outreach. ' +
+    'new_label_description: one sentence on what belongs in that label, or an empty string.'
   );
 
   if (notes) {
@@ -92,6 +99,14 @@ function buildClassifierSystemPrompt(labels, notes, corrections) {
     lines.push('', 'Choices this person made themselves. Treat similar senders the same way:');
     corrections.forEach(function(c) {
       lines.push('- ' + c.sender + (c.subject ? ' (e.g. "' + c.subject + '")' : '') + ': ' + c.choice);
+    });
+  }
+
+  if (relabels && relabels.length) {
+    lines.push('', 'Emails this person re-labelled after you sorted them. Learn from these for similar email:');
+    relabels.forEach(function(r) {
+      lines.push('- ' + r.sender + (r.subject ? ', "' + r.subject + '"' : '') + ': you chose ' + r.was +
+        ', they moved it to ' + r.now);
     });
   }
 
@@ -107,9 +122,12 @@ function buildClassifierSchema(labelNames) {
       sender_type: { type: 'string', enum: SENDER_TYPES.slice() },
       label: { type: 'string', enum: labelNames.concat(['NONE']) },
       needs_attention: { type: 'boolean' },
-      confidence: { type: 'string', enum: ['high', 'medium', 'low'] }
+      confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+      new_label: { type: 'string' },
+      new_label_description: { type: 'string' }
     },
-    required: ['reason', 'sender_type', 'label', 'needs_attention', 'confidence'],
+    required: ['reason', 'sender_type', 'label', 'needs_attention', 'confidence', 'new_label',
+      'new_label_description'],
     additionalProperties: false
   };
 }
@@ -266,7 +284,9 @@ function validateClassification(result, labelNames) {
     sender_type: SENDER_TYPES.indexOf(r.sender_type) >= 0 ? r.sender_type : 'person',
     label: names[r.label] ? r.label : 'NONE',
     needs_attention: r.needs_attention === true,
-    confidence: ['high', 'medium', 'low'].indexOf(r.confidence) >= 0 ? r.confidence : 'low'
+    confidence: ['high', 'medium', 'low'].indexOf(r.confidence) >= 0 ? r.confidence : 'low',
+    new_label: normalizeLabelName(r.new_label),
+    new_label_description: String(r.new_label_description || '').trim().substring(0, 200)
   };
 }
 

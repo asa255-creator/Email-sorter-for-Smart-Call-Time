@@ -62,12 +62,20 @@ var DEFAULT_CONFIG = [
     'How hard Claude thinks about each email: low (recommended), medium or high. Higher costs more.'],
   ['sorting_notes', '',
     'Anything Claude should know about you when sorting, in plain English. Example: "I run a startup. Investor and customer emails always need my attention."'],
+  ['run_every_minutes', '5',
+    'How often new mail is sorted: 1, 5, 10, 15 or 30 minutes. 1 gets alerts out of the inbox almost ' +
+    'immediately. Run Email Sorter > Resume automatic sorting after changing it.'],
   ['max_threads_per_run', '30',
-    'Most conversations sorted per run. The sorter runs every 10 minutes.'],
+    'Most conversations sorted per run.'],
   ['backfill_days', '14',
     'Unsorted inbox mail older than this many days is left alone. Raise it once to clean up an old inbox (costs more).'],
   ['learn_after', '3',
     'After Claude sorts an automated or bulk sender the same way this many times, their mail is sorted from memory without asking Claude.'],
+  ['auto_create_labels', 'yes',
+    'yes: when Claude suggests the same new label (or sub-label) for several different emails, the sorter ' +
+    'creates it. New labels keep mail in the inbox until you choose an Inbox action. no: just log the idea.'],
+  ['new_label_after', '3',
+    'How many different emails must get the same label suggestion before it is created.'],
   ['outreach_label', 'Cold Outreach',
     'Label for sales and marketing emails dressed up as personal (HubSpot, Apollo, Outreach sequences). Its inbox action is set on the Labels sheet.'],
   ['review_label', 'Needs Review',
@@ -175,12 +183,13 @@ function setApiKey(key) {
 // s:<threadId> -> when the conversation was last sorted (its last message time)
 // a:<threadId> -> when the sorter archived it (to tell your rescues from replies)
 // d:<threadId> -> when an "Archive after days" conversation is due to be archived
+// l:<threadId> -> the label the sorter chose, so a label you change in Gmail can be learned from
 //
 // Times are stored as base-36 epoch seconds to stay well inside the 500 KB
 // property quota.
 // ============================================================================
 
-var STATE_PREFIX = { SEEN: 's:', ARCHIVED: 'a:', DUE: 'd:' };
+var STATE_PREFIX = { SEEN: 's:', ARCHIVED: 'a:', DUE: 'd:', LABELED: 'l:' };
 
 function encodeTime(ms) {
   return Math.floor(ms / 1000).toString(36);
@@ -197,10 +206,13 @@ function decodeTime(text) {
  */
 function loadState() {
   var all = PropertiesService.getScriptProperties().getProperties();
-  var state = { seen: {}, archived: {}, due: {}, other: {}, changes: {}, deletes: {} };
+  var state = { seen: {}, archived: {}, due: {}, labeled: {}, other: {}, changes: {}, deletes: {} };
   Object.keys(all).forEach(function(key) {
     var id = key.substring(2);
-    if (key.indexOf(STATE_PREFIX.SEEN) === 0) state.seen[id] = decodeTime(all[key]);
+    if (key.indexOf(STATE_PREFIX.LABELED) === 0) {
+      var parts = String(all[key]).split('|');
+      state.labeled[id] = { at: decodeTime(parts[0]), type: parts[1] || '', label: parts.slice(2).join('|') };
+    } else if (key.indexOf(STATE_PREFIX.SEEN) === 0) state.seen[id] = decodeTime(all[key]);
     else if (key.indexOf(STATE_PREFIX.ARCHIVED) === 0) state.archived[id] = decodeTime(all[key]);
     else if (key.indexOf(STATE_PREFIX.DUE) === 0) state.due[id] = decodeTime(all[key]);
     else state.other[key] = all[key];
@@ -211,7 +223,15 @@ function loadState() {
 function stateBucket_(state, prefix) {
   if (prefix === STATE_PREFIX.SEEN) return state.seen;
   if (prefix === STATE_PREFIX.ARCHIVED) return state.archived;
+  if (prefix === STATE_PREFIX.LABELED) return state.labeled;
   return state.due;
+}
+
+/** Remembers which label the sorter chose (and why) so a later change by you can be learned from. */
+function stateSetLabeled(state, threadId, at, type, label) {
+  state.labeled[threadId] = { at: at, type: type || '', label: label };
+  state.changes[STATE_PREFIX.LABELED + threadId] = encodeTime(at) + '|' + (type || '') + '|' + label;
+  delete state.deletes[STATE_PREFIX.LABELED + threadId];
 }
 
 function stateSet(state, prefix, threadId, ms) {
@@ -237,7 +257,13 @@ function pruneState(state, nowMs) {
   Object.keys(state.archived).forEach(function(id) {
     if (nowMs - state.archived[id] > 45 * DAY) stateDelete(state, STATE_PREFIX.ARCHIVED, id);
   });
+  Object.keys(state.labeled).forEach(function(id) {
+    if (nowMs - state.labeled[id].at > LABEL_WATCH_DAYS * DAY) stateDelete(state, STATE_PREFIX.LABELED, id);
+  });
 }
+
+// How long after sorting a label you change in Gmail is still learned from.
+var LABEL_WATCH_DAYS = 7;
 
 function saveState(state) {
   var props = PropertiesService.getScriptProperties();

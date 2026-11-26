@@ -76,7 +76,7 @@ function features(over) {
 
 test('default GitHub rules split notifications by reason', () => {
   const rules = S.parseRules(S.DEFAULT_RULES);
-  assert.equal(rules.length, 5);
+  assert.equal(rules.length, 6);
   const gh = (reason, subject) => S.matchRule(rules, features({
     fromHeader: '"Org" <notifications@github.com>', subject: subject || '[org/repo] Something',
     ccHeader: reason ? '"Reason" <' + reason + '@noreply.github.com>' : ''
@@ -84,11 +84,12 @@ test('default GitHub rules split notifications by reason', () => {
   const failed = gh('ci_activity', '[org/repo] Run failed: Integration Tests');
   assert.equal(failed.action, S.ACTIONS.ARCHIVE_LATER, 'failed runs stay visible for a day');
   assert.equal(failed.days, 1);
-  assert.equal(gh('ci_activity', '[org/repo] Run succeeded: Deploy Dev').action, S.ACTIONS.ARCHIVE_READ);
+  assert.equal(gh('ci_activity', '[org/repo] Run succeeded: Deploy Dev').action, S.ACTIONS.ARCHIVE,
+    'filed right away but left unread');
   assert.equal(gh('review_requested').action, S.ACTIONS.KEEP);
   assert.equal(gh('mention').action, S.ACTIONS.KEEP);
-  assert.equal(gh('ci_activity').action, S.ACTIONS.ARCHIVE_READ);
-  assert.equal(gh('subscribed').action, S.ACTIONS.ARCHIVE_READ);
+  assert.equal(gh('ci_activity').action, S.ACTIONS.ARCHIVE);
+  assert.equal(gh('subscribed').action, S.ACTIONS.ARCHIVE);
   assert.equal(gh('comment').action, S.ACTIONS.ARCHIVE_LATER);
   assert.equal(gh('comment').days, 2);
   assert.equal(gh('').note, 'Any other GitHub notification');
@@ -308,4 +309,53 @@ test('cells that look like formulas are neutralised', () => {
   assert.equal(S.safeCell('=IMPORTXML("x")'), "'=IMPORTXML(\"x\")");
   assert.equal(S.safeCell('Hello'), 'Hello');
   assert.equal(S.safeCell(null), '');
+});
+
+test('Sentry goes to your existing warnings label and stays in the inbox', () => {
+  const rules = S.parseRules(S.defaultRulesFor(['Clients', 'warnings (about products or services)', 'Warnings/Old']));
+  const r = S.matchRule(rules, features({ fromHeader: 'Sentry <noreply@md.getsentry.com>', subject: 'SCTS-BACKEND - Error' }));
+  assert.equal(r.label, 'warnings (about products or services)');
+  assert.equal(r.action, S.ACTIONS.KEEP);
+  assert.equal(S.parseRules(S.defaultRulesFor([]))[0].label, 'Warnings', 'falls back to a Warnings label');
+});
+
+test('label ideas count distinct emails and fire at the threshold', () => {
+  const ideas = {};
+  const now = Date.now();
+  assert.equal(S.addLabelIdea(ideas, 'Finance/Receipts', 'Purchase receipts', 't1', now, 3), null);
+  assert.equal(S.addLabelIdea(ideas, 'Finance/Receipts', '', 't1', now, 3), null, 'same email counted once');
+  assert.equal(S.addLabelIdea(ideas, 'finance/receipts', '', 't2', now, 3), null);
+  const idea = S.addLabelIdea(ideas, 'Finance/Receipts', '', 't3', now, 3);
+  assert.equal(idea.count, 3);
+  assert.equal(idea.description, 'Purchase receipts');
+  assert.deepEqual(JSON.parse(JSON.stringify(idea.threads)), ['t1', 't2', 't3']);
+  for (let i = 0; i < 30; i++) S.addLabelIdea(ideas, 'Idea ' + i, '', 'x' + i, now + i, 3);
+  assert.ok(Object.keys(ideas).length <= 20, 'idea store stays small');
+});
+
+test('suggested label names are cleaned and sorter names refused', () => {
+  assert.equal(S.normalizeLabelName('  Finance /  Receipts '), 'Finance/Receipts');
+  assert.equal(S.normalizeLabelName('NONE'), '');
+  assert.equal(S.normalizeLabelName('Sorter/Archived'), '');
+  assert.equal(S.normalizeLabelName('_hidden'), '');
+  assert.equal(S.normalizeLabelName(''), '');
+});
+
+test('a label you swap in Gmail is found; ancestors and sorter labels are not your choice', () => {
+  assert.equal(S.findRelabel(['Work', 'Work/Clients'], 'Work/Tech'), 'Work/Clients');
+  assert.equal(S.findRelabel(['Work', 'Work/Tech'], 'Work/Tech'), '', 'unchanged');
+  assert.equal(S.findRelabel(['Work'], 'Work/Tech'), '', 'only the parent left: nothing chosen');
+  assert.equal(S.findRelabel(['Needs Review', 'Receipts'], 'Newsletters', ['Needs Review']), 'Receipts');
+  assert.equal(S.findRelabel(['_sorted', 'Sorter/Archived'], 'Newsletters'), '');
+});
+
+test('the schema lets Claude suggest a new label; the prompt shows your label changes', () => {
+  const schema = S.buildClassifierSchema(['A']);
+  assert.ok(schema.required.includes('new_label'));
+  const v = S.validateClassification({ sender_type: 'automated', label: 'A', confidence: 'high', reason: 'r',
+    new_label: ' Finance / Receipts ', new_label_description: 'Receipts' }, ['A']);
+  assert.equal(v.new_label, 'Finance/Receipts');
+  const p = S.buildClassifierSystemPrompt([], '', [], [{ sender: 'a@b.com', subject: 'Invoice 7', was: 'Newsletters', now: 'Receipts' }]);
+  assert.match(p, /a@b\.com, "Invoice 7": you chose Newsletters, they moved it to Receipts/);
+  assert.match(p, /new_label/);
 });

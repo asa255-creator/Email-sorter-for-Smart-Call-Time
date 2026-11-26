@@ -233,8 +233,8 @@ function syncLabelsToSheet(oldDescriptions) {
   return rows.length;
 }
 
-/** Adds or updates one label's row (used when applying suggestions). */
-function upsertLabelRow(name, description, action, days) {
+/** Adds or updates one label's row (used for suggestions and labels the sorter creates). */
+function upsertLabelRow(name, description, action, days, note) {
   var sheet = SpreadsheetApp.getActive().getSheetByName('Labels');
   var rows = readLabelRows_(sheet);
   for (var i = 0; i < rows.length; i++) {
@@ -245,7 +245,7 @@ function upsertLabelRow(name, description, action, days) {
     }
   }
   sheet.appendRow([safeCell(name), safeCell(description || ''), action || ACTIONS.KEEP,
-    days === null || days === undefined ? '' : days, true, '']);
+    days === null || days === undefined ? '' : days, true, note || '']);
 }
 
 // ============================================================================
@@ -258,7 +258,9 @@ function ensureRulesSheet(ss) {
   sheet = ss.insertSheet('Rules');
   sheet.getRange(1, 1, 1, RULES_HEADER.length).setValues([RULES_HEADER]);
   headerStyle_(sheet.getRange(1, 1, 1, RULES_HEADER.length), '#188038');
-  sheet.getRange(2, 1, DEFAULT_RULES.length, RULES_HEADER.length).setValues(DEFAULT_RULES);
+  var existing = GmailApp.getUserLabels().map(function(l) { return l.getName(); });
+  var rules = defaultRulesFor(existing);
+  sheet.getRange(2, 1, rules.length, RULES_HEADER.length).setValues(rules);
   sheet.getRange(2, 1, 100, 1).setDataValidation(checkboxValidation_());
   sheet.getRange(2, 5, 100, 1).setDataValidation(actionValidation_());
   sheet.setFrozenRows(1);
@@ -308,7 +310,7 @@ function ensureStartHereSheet(ss) {
   var lines = [
     ['Email Sorter ' + SORTER_VERSION],
     [''],
-    ['Every 10 minutes it sorts new inbox mail in this order. The first step that has an answer wins:'],
+    ['Every few minutes (run_every_minutes on Config) it sorts new inbox mail in this order. The first step with an answer wins:'],
     ['  1. Your own choices (Senders sheet, Source = you)'],
     ['  2. Rules (Rules sheet). GitHub notifications are handled here, no AI involved.'],
     ['  3. Senders it has learned (Senders sheet)'],
@@ -324,6 +326,11 @@ function ensureStartHereSheet(ss) {
     ['  Apply "Sorter/Always keep" to an email: that sender is never archived again.'],
     ['  Apply "Sorter/Always archive" to an email: that sender is always archived (good for HubSpot-style sales mail).'],
     ['  Move something from "Sorter/Archived" back to the inbox: that sender\'s mail stays in the inbox from now on.'],
+    ['  Change a label the sorter chose: it is noted on the Corrections sheet and Claude learns from it.'],
+    ['    For automated senders (receipts, alerts, newsletters) their future mail follows your new label.'],
+    [''],
+    ['New labels: when Claude keeps wanting a label you don\'t have (often a sub-label like Finance/Receipts),'],
+    ['the sorter creates it and files those emails there. New labels keep mail in the inbox until you choose.'],
     [''],
     ['Every decision and its reason is on the Log sheet. Click a subject to open the email.'],
     ['Not sure which labels you need? Email Sorter > Suggest labels from my mail.']

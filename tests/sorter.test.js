@@ -80,7 +80,7 @@ test('upgrade keeps your data, moves the key, switches to Sonnet 5.5 and drops t
   assert.equal(byName['Needs Review'][4], false, 'the review label is no longer offered to Claude (v1 bug)');
   assert.equal(ss.getSheetByName('Queue'), null);
   assert.equal(ss.getSheetByName('Instructions'), null);
-  assert.equal(S.readRules().length, 5);
+  assert.equal(S.readRules().length, 6);
   assert.deepEqual(JSON.parse(JSON.stringify(S.readLabels().aiList.map((l) => l.name))), ['Clients', 'Newsletters']);
 });
 
@@ -132,7 +132,7 @@ test('a full run sorts GitHub, people, sales sequences and newsletters correctly
 
   // GitHub: rules, no Claude.
   assert.equal(gmail.thread('gh-ci').inbox, false);
-  assert.equal(gmail.thread('gh-ci').unread, false);
+  assert.equal(gmail.thread('gh-ci').unread, true, 'CI runs are filed but left unread');
   assert.ok(gmail.thread('gh-ci').labels.has('GitHub'));
   assert.ok(gmail.thread('gh-ci').labels.has('Sorter/Archived'));
   assert.equal(gmail.thread('gh-review').inbox, true);
@@ -360,4 +360,88 @@ test('Docs shares are judged by who shared them; colleagues at your domain are n
   S.runSorter();
   assert.equal(gmail.thread('colleague').inbox, true);
   assert.match(ss.getSheetByName('Log').data(7)[0][6], /they are at your company/);
+});
+
+test('Claude can create a new sub-label after suggesting it for three different emails', () => {
+  const w = upgradedWorld(() => claudeOk({ reason: 'Receipt.', sender_type: 'automated', label: 'NONE',
+    needs_attention: false, confidence: 'high', new_label: 'Finance/Receipts',
+    new_label_description: 'Receipts and invoices for purchases' }));
+  const { ss, ctx: S, gmail } = w;
+  ['shop1', 'shop2', 'shop3'].forEach((id, i) => gmail.addThread(id, [{ from: 'orders@' + id + '.com', to: ME,
+    subject: 'Your receipt', date: ago((i + 1) * HOUR) }]));
+  const stats = S.runSorter();
+  assert.equal(stats.labelsCreated, 1);
+  assert.ok(gmail.getUserLabelByName('Finance/Receipts'));
+  assert.ok(gmail.getUserLabelByName('Finance'), 'parent created too');
+  ['shop1', 'shop2', 'shop3'].forEach((id) => assert.ok(gmail.thread(id).labels.has('Finance/Receipts'), id));
+  const row = S.readLabels().map['finance/receipts'];
+  assert.equal(row.description, 'Receipts and invoices for purchases');
+  assert.equal(row.action, 'Keep in inbox');
+  assert.equal(row.ai, true, 'Claude can choose it from now on');
+  assert.ok(ss.getSheetByName('Log').data(7).some((r) => r[3] === 'New label'));
+
+  // With auto-create off, the idea is only logged.
+  const w2 = upgradedWorld(() => claudeOk({ reason: 'Receipt.', sender_type: 'automated', label: 'NONE',
+    needs_attention: false, confidence: 'high', new_label: 'Finance/Receipts', new_label_description: 'Receipts' }));
+  w2.ctx.setConfig('auto_create_labels', 'no');
+  ['a', 'b', 'c'].forEach((id) => w2.gmail.addThread(id, [{ from: 'x@' + id + '.com', to: ME, subject: 'r', date: ago(HOUR) }]));
+  w2.ctx.runSorter();
+  assert.equal(w2.gmail.getUserLabelByName('Finance/Receipts'), null);
+  assert.ok(w2.ss.getSheetByName('Log').data(7).some((r) => r[3] === 'Label idea'));
+});
+
+test('changing a label in Gmail teaches it: automated senders follow you, people become examples', () => {
+  const w = upgradedWorld((payload) => {
+    const person = /Pat </.test(payload.messages[0].content);
+    return claudeOk({ reason: 'x', sender_type: person ? 'person' : 'automated', label: 'Newsletters',
+      needs_attention: false, confidence: 'high', new_label: '', new_label_description: '' });
+  });
+  const { ss, ctx: S, gmail, scriptProps } = w;
+  gmail.label('Receipts');
+  S.syncLabelsToSheet();
+  gmail.addThread('bill', [{ from: 'billing@saas.com', to: ME, subject: 'Invoice 7', date: ago(2 * HOUR) }]);
+  gmail.addThread('pat', [{ from: 'Pat <pat@friend.org>', to: ME, subject: 'Lunch?', date: ago(2 * HOUR) }]);
+  S.runSorter();
+  assert.ok(scriptProps.getProperty('l:bill'), 'the sorter remembers what it chose');
+
+  // You swap Newsletters for Receipts on both, an hour later.
+  ['bill', 'pat'].forEach((id) => {
+    gmail.thread(id).labels.delete('Newsletters');
+    gmail.thread(id).labels.add('Receipts');
+    const v = scriptProps.getProperty('l:' + id).split('|');
+    scriptProps.setProperty('l:' + id, [S.encodeTime(Date.now() - 2 * HOUR)].concat(v.slice(1)).join('|'));
+  });
+  S.runSorter_({ forceSweep: true });
+
+  const senders = senderRows(ss);
+  assert.equal(senders['billing@saas.com'][1], 'Receipts');
+  assert.equal(senders['billing@saas.com'][6], 'you');
+  assert.notEqual(senders['pat@friend.org'][6], 'you', 'a person is not locked to one label');
+  const corrections = ss.getSheetByName('Corrections').data(5);
+  assert.equal(corrections.length, 2);
+  assert.deepEqual(corrections.map((r) => r.slice(1)).sort(), [
+    ['billing@saas.com', 'Invoice 7', 'Newsletters', 'Receipts'],
+    ['pat@friend.org', 'Lunch?', 'Newsletters', 'Receipts']
+  ]);
+  assert.match(S.buildClassifierSystemPrompt([], '', [], S.readRelabels(20)), /they moved it to Receipts/);
+
+  // Next invoice from that sender goes straight to Receipts, no Claude.
+  gmail.addThread('bill2', [{ from: 'billing@saas.com', to: ME, subject: 'Invoice 8', date: ago(60000) }]);
+  S.runSorter();
+  assert.ok(gmail.thread('bill2').labels.has('Receipts'));
+  assert.equal(ss.getSheetByName('Log').data(7)[0][3], 'You');
+});
+
+test('a run with nothing new does no sheet work', () => {
+  const w = upgradedWorld(() => claudeOk({}));
+  const { ctx: S, ss } = w;
+  S.runSorter_({ forceSweep: true });
+  const before = ss.getSheetByName('Log').getLastRow();
+  const sheetsRead = [];
+  const orig = ss.getSheetByName.bind(ss);
+  ss.getSheetByName = (n) => { sheetsRead.push(n); return orig(n); };
+  const r = S.runSorter();
+  assert.equal(r.idle, true);
+  assert.ok(!sheetsRead.includes('Senders') && !sheetsRead.includes('Labels'), 'only Config is read: ' + sheetsRead);
+  assert.equal(ss.getSheetByName('Log').getLastRow(), before);
 });

@@ -1,12 +1,14 @@
 /**
  * Email Sorter — the run.
  *
- * runSorter() is called by a 10-minute trigger. Each run:
+ * runSorter() is called by a trigger every run_every_minutes. Each run first
+ * checks cheaply whether there is anything to do, then:
  *   1. Learns from you: "Sorter/Always keep", "Sorter/Always archive", and
  *      archived mail you moved back to the inbox.
  *   2. Sorts inbox conversations that are new, or that got a new message
  *      since they were sorted.
- *   3. Once an hour, archives "Archive after days" conversations that are due.
+ *   3. Once an hour, archives "Archive after days" conversations that are due
+ *      and learns from labels you changed in Gmail (Learn.gs).
  *
  * Gmail itself is the queue: a hidden "_sorted" label marks conversations
  * already handled, so there is no Queue sheet to fall out of step.
@@ -27,13 +29,22 @@ function runSorter_(opts) {
   if (!lock.tryLock(10000)) return { busy: true };
   var run = null;
   try {
-    run = startRun_();
+    var now = Date.now();
+    var state = loadState();
+    var work = scanForWork_(state);
+    var sweepDue = opts.forceSweep || now - Number(getStatus('last_sweep') || 0) > SWEEP_EVERY_MS;
+    if (!work.any && !sweepDue) {
+      // Nothing new: skip loading the sheets, so frequent runs stay cheap.
+      setStatus('last_run', now);
+      return { sorted: 0, idle: true };
+    }
+    run = startRun_(state, now);
     run.problem = run.claudeBlocked;
-    processCorrections_(run);
-    processInbox_(run);
-    var lastSweep = Number(getStatus('last_sweep') || 0);
-    if (opts.forceSweep || run.now - lastSweep > SWEEP_EVERY_MS) {
+    processCorrections_(run, work);
+    processInbox_(run, work.inbox);
+    if (sweepDue) {
       sweepDue_(run);
+      checkRelabels(run);
       setStatus('last_sweep', run.now);
     }
     setStatus('last_error', run.problem || '');
@@ -48,27 +59,30 @@ function runSorter_(opts) {
   return run ? run.stats : {};
 }
 
-function startRun_() {
+function startRun_(state, now) {
   var mineList = getMyAddresses();
   var mine = {};
   mineList.forEach(function(a) { mine[a] = true; });
   return {
-    now: Date.now(),
+    now: now || Date.now(),
     started: Date.now(),
     mineList: mineList,
     mine: mine,
     labels: readLabels(),
     rules: readRules(),
     senders: loadSenders(),
-    state: loadState(),
+    state: state || loadState(),
     learnAfter: getConfigNumber('learn_after'),
     outreachLabel: getConfig('outreach_label'),
     reviewLabel: getConfig('review_label'),
     outreachSignals: splitList(getConfig('outreach_signals')),
     prompt: null,
     claudeBlocked: claudeBlockedReason_(),
+    ideas: null,
+    ideasDirty: false,
+    relabels: [],
     logs: [],
-    stats: { sorted: 0, archived: 0, kept: 0, claude: 0, rules: 0, memory: 0, learned: 0, cost: 0 },
+    stats: { sorted: 0, archived: 0, kept: 0, claude: 0, rules: 0, memory: 0, learned: 0, labelsCreated: 0, cost: 0 },
     stop: false,
     problem: ''
   };
@@ -78,6 +92,8 @@ function finishRun_(run) {
   var steps = [
     function() { saveSenders(run.senders); },
     function() { saveState(run.state); },
+    function() { if (run.ideasDirty) saveIdeas(run.ideas); },
+    function() { flushRelabels(run); },
     function() { flushLog(run); },
     function() { recordStats_(run.stats); },
     function() { setStatus('last_run', run.now); }
@@ -95,21 +111,55 @@ function timeLeft_(run) {
 // 1. LEARN FROM YOU
 // ============================================================================
 
-function processCorrections_(run) {
+/**
+ * Finds everything this run has to do with a handful of Gmail calls and no
+ * sheet reads, so a run with nothing new costs almost nothing.
+ */
+function scanForWork_(state) {
+  var work = { teach: [], rescued: [], inbox: [], any: false };
   [
     { name: SORTER_LABELS.ALWAYS_KEEP, keep: true },
     { name: SORTER_LABELS.ALWAYS_ARCHIVE, keep: false }
-  ].forEach(function(teach) {
-    var label = findLabel(teach.name);
+  ].forEach(function(t) {
+    var label = findLabel(t.name);
     if (!label) return;
     label.getThreads(0, 30).forEach(function(thread) {
-      if (!timeLeft_(run)) return;
-      learnFromLabel_(run, thread, label, teach.keep);
+      work.teach.push({ thread: thread, label: label, keep: t.keep });
     });
   });
 
-  var rescued = GmailApp.search('in:inbox ' + labelSearchTerm(SORTER_LABELS.ARCHIVED), 0, 50);
-  rescued.forEach(function(thread) {
+  work.rescued = GmailApp.search('in:inbox ' + labelSearchTerm(SORTER_LABELS.ARCHIVED), 0, 50);
+
+  var max = getConfigNumber('max_threads_per_run');
+  var sortedTerm = labelSearchTerm(SORTER_LABELS.SORTED);
+  var queued = {};
+  // Conversations sorted before that have a newer message (Gmail moves those back to the inbox).
+  // Only look at messages since the previous run (with a margin) to keep Gmail calls low.
+  var lastRun = Number(getStatus('last_run') || 0);
+  var since = lastRun ? 'after:' + Math.floor((lastRun - 20 * 60 * 1000) / 1000) : 'newer_than:1d';
+  GmailApp.search('in:inbox ' + sortedTerm + ' ' + since, 0, 100).forEach(function(thread) {
+    var id = thread.getId();
+    var seen = state.seen[id];
+    if (seen && thread.getLastMessageDate().getTime() <= seen + 1000) return;
+    if (!queued[id]) { queued[id] = true; work.inbox.push({ thread: thread, sortedBefore: true }); }
+  });
+  // Conversations never sorted, newest first.
+  GmailApp.search('in:inbox -' + sortedTerm + ' newer_than:' + getConfigNumber('backfill_days') + 'd', 0, max)
+    .forEach(function(thread) {
+      var id = thread.getId();
+      if (!queued[id]) { queued[id] = true; work.inbox.push({ thread: thread, sortedBefore: false }); }
+    });
+
+  work.any = work.teach.length + work.rescued.length + work.inbox.length > 0;
+  return work;
+}
+
+function processCorrections_(run, work) {
+  work.teach.forEach(function(t) {
+    if (!timeLeft_(run)) return;
+    learnFromLabel_(run, t.thread, t.label, t.keep);
+  });
+  work.rescued.forEach(function(thread) {
     if (!timeLeft_(run)) return;
     learnFromRescue_(run, thread);
   });
@@ -191,30 +241,8 @@ function learnFromRescue_(run, thread) {
 // 2. SORT THE INBOX
 // ============================================================================
 
-function processInbox_(run) {
+function processInbox_(run, todo) {
   var max = getConfigNumber('max_threads_per_run');
-  var days = getConfigNumber('backfill_days');
-  var sortedTerm = labelSearchTerm(SORTER_LABELS.SORTED);
-  var todo = [];
-  var queued = {};
-
-  // Conversations sorted before that have a newer message (Gmail moves those back to the inbox).
-  // Only look at messages since the previous run (with a margin) to keep Gmail calls low.
-  var lastRun = Number(getStatus('last_run') || 0);
-  var since = lastRun ? 'after:' + Math.floor((lastRun - 20 * 60 * 1000) / 1000) : 'newer_than:1d';
-  GmailApp.search('in:inbox ' + sortedTerm + ' ' + since, 0, 100).forEach(function(thread) {
-    var id = thread.getId();
-    var seen = run.state.seen[id];
-    if (seen && thread.getLastMessageDate().getTime() <= seen + 1000) return;
-    if (!queued[id]) { queued[id] = true; todo.push({ thread: thread, sortedBefore: true }); }
-  });
-
-  // Conversations never sorted, newest first.
-  GmailApp.search('in:inbox -' + sortedTerm + ' newer_than:' + days + 'd', 0, max).forEach(function(thread) {
-    var id = thread.getId();
-    if (!queued[id]) { queued[id] = true; todo.push({ thread: thread, sortedBefore: false }); }
-  });
-
   for (var i = 0; i < todo.length && i < max; i++) {
     if (run.stop || !timeLeft_(run)) break;
     var thread = todo[i].thread;
@@ -277,7 +305,9 @@ function sortThread_(run, thread, sortedBefore) {
   }
 
   applyDecision_(run, thread, f, decision);
+  watchLabel(run, f, decision);
   logDecision(run, f, decision);
+  if (answer && answer.ai.new_label) considerLabelIdea(run, answer.ai, f);
   return decision;
 }
 
@@ -298,7 +328,7 @@ function getPrompt_(run) {
       labelNames: names,
       schema: buildClassifierSchema(names),
       system: buildClassifierSystemPrompt(run.labels.aiList, getConfig('sorting_notes'),
-        senderCorrections(run.senders, 25))
+        senderCorrections(run.senders, 25), readRelabels(20))
     };
   }
   return run.prompt;

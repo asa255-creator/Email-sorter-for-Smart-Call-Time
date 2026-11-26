@@ -52,7 +52,7 @@ function setupSorter() {
     '• use Claude Sonnet 5.5\n' +
     '• remove the old Queue and Instructions sheets\n' +
     '• add Sorter labels to Gmail\n' +
-    '• sort your inbox every 10 minutes\n\n' +
+    '• sort your inbox every ' + runInterval_() + ' minute' + (runInterval_() === 1 ? '' : 's') + '\n\n' +
     'Nothing is archived until you choose an Inbox action for a label, apart from GitHub noise ' +
     '(see the Rules sheet) and cold sales email.', ui.ButtonSet.OK_CANCEL);
   if (go !== ui.Button.OK) return;
@@ -61,6 +61,7 @@ function setupSorter() {
   var oldDescriptions = ensureLabelsSheet(ss, notes);
   if (ensureRulesSheet(ss)) notes.push('Added the Rules sheet with GitHub rules.');
   if (ensureSendersSheet(ss)) notes.push('Added the Senders sheet (sender memory).');
+  if (ensureCorrectionsSheet(ss)) notes.push('Added the Corrections sheet (labels you change in Gmail).');
   ensureLogSheet(ss);
   ensureStartHereSheet(ss);
   ensureSorterLabels();
@@ -85,9 +86,16 @@ function setupSorter() {
     ui.ButtonSet.OK);
 }
 
+/** run_every_minutes rounded to an interval Apps Script allows (1, 5, 10, 15 or 30). */
+function runInterval_() {
+  var wanted = getConfigNumber('run_every_minutes');
+  var allowed = [1, 5, 10, 15, 30];
+  return allowed.reduce(function(best, n) { return Math.abs(n - wanted) < Math.abs(best - wanted) ? n : best; }, 5);
+}
+
 function installTrigger_() {
   ScriptApp.getProjectTriggers().forEach(function(t) { ScriptApp.deleteTrigger(t); });
-  ScriptApp.newTrigger('runSorter').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('runSorter').timeBased().everyMinutes(runInterval_()).create();
 }
 
 function pauseSorting() {
@@ -100,7 +108,8 @@ function pauseSorting() {
 
 function resumeSorting() {
   installTrigger_();
-  SpreadsheetApp.getUi().alert('Resumed', 'Your inbox is sorted every 10 minutes.', SpreadsheetApp.getUi().ButtonSet.OK);
+  SpreadsheetApp.getUi().alert('Resumed', 'Your inbox is sorted every ' + runInterval_() + ' minute' +
+    (runInterval_() === 1 ? '' : 's') + '.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
 function isScheduled_() {
@@ -123,6 +132,7 @@ function sortNowFromMenu() {
     'Sorted ' + (stats.sorted || 0) + ' conversation' + (stats.sorted === 1 ? '' : 's') + ': ' +
     (stats.rules || 0) + ' by rules, ' + (stats.memory || 0) + ' from memory, ' + (stats.claude || 0) + ' by Claude.\n' +
     'Archived ' + (stats.archived || 0) + '. Learned from ' + (stats.learned || 0) + ' of your corrections.' +
+    (stats.labelsCreated ? ' Created ' + stats.labelsCreated + ' new label' + (stats.labelsCreated === 1 ? '' : 's') + '.' : '') +
     (problem ? '\n\nProblem: ' + problem : '') + '\n\nDetails are on the Log sheet.', ui.ButtonSet.OK);
 }
 
@@ -143,7 +153,7 @@ function showStatus() {
   var problem = getStatus('last_error') || claudeBlockedReason_();
 
   ui.alert('Email Sorter status',
-    'Automatic sorting: ' + (isScheduled_() ? 'on, every 10 minutes' : 'PAUSED') + '\n' +
+    'Automatic sorting: ' + (isScheduled_() ? 'on, every ' + runInterval_() + ' min' : 'PAUSED') + '\n' +
     'Last run: ' + (lastRun ? formatDate_(new Date(lastRun)) : 'never') + '\n' +
     'Model: ' + getConfig('claude_model') + ' (effort ' + getConfig('claude_effort') + ')\n' +
     'API key: ' + (getApiKey() ? 'set' : 'NOT SET') + '\n' +
@@ -152,8 +162,17 @@ function showStatus() {
     ' memory, ' + (stats.claude || 0) + ' Claude), ' + (stats.archived || 0) + ' archived.\n' +
     'Claude cost today: about $' + (stats.cost || 0).toFixed(2) + '\n' +
     '\nSenders known: ' + senders.rows.length + ' (' + learned + ' sorted without Claude)\n' +
-    'Waiting to be archived later: ' + Object.keys(state.due).length,
+    'Waiting to be archived later: ' + Object.keys(state.due).length + '\n' +
+    describeIdeas_(),
     ui.ButtonSet.OK);
+}
+
+function describeIdeas_() {
+  var ideas = loadIdeas();
+  var keys = Object.keys(ideas).sort(function(a, b) { return ideas[b].count - ideas[a].count; });
+  if (!keys.length) return 'Label ideas: none yet';
+  return 'Label ideas Claude has suggested (created at ' + getConfigNumber('new_label_after') + '):\n' +
+    keys.slice(0, 8).map(function(k) { return '  ' + ideas[k].name + ' (' + ideas[k].count + ')'; }).join('\n');
 }
 
 function setApiKeyFromMenu() {
