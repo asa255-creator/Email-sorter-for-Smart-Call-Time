@@ -345,7 +345,14 @@ function loadSorter(opts) {
     Gmail: {
       Users: {
         Labels: {
-          create: (resource) => { gmail.hiddenLabels.push(resource); gmail.label(resource.name); return resource; }
+          create: (resource) => {
+            gmail.hiddenLabels.push(resource);
+            gmail.label(resource.name).listVisibility = resource.labelListVisibility;
+            return resource;
+          },
+          list: () => ({ labels: Object.values(gmail.labels).map((l) => ({
+            id: 'id:' + l.name, name: l.name, labelListVisibility: l.listVisibility || 'labelShow' })) }),
+          patch: (resource, user, id) => { gmail.label(id.substring(3)).listVisibility = resource.labelListVisibility; }
         }
       }
     },

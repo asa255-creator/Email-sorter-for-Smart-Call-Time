@@ -77,7 +77,9 @@ There is no hidden model. Everything it learns is a row you can read and edit.
 
 Label changes are checked hourly, for conversations sorted in the last 7 days. Sender choices live on the **Senders** sheet, and editing a row there (Label, Inbox action or Type) makes it your choice. A row for `@example.com` covers everyone at that domain. Your choices and label changes are given to Claude as examples, so similar senders get the same treatment.
 
-Everything the sorter archives carries the `Sorter/Archived` label, and every decision and its reason is on the Log sheet; each subject there links to the email.
+Everything the sorter archives carries the `Sorter/Archived` label. Search `label:sorter-archived` in Gmail to see it all. Every decision and its reason is on the Log sheet, and each subject there links to the email.
+
+The sorter's own labels (`Sorter/…`, `Cold Outreach`) are kept out of your Gmail sidebar. They still work: `Sorter/Always keep` and `Sorter/Always archive` are in the "Label as" menu on any email.
 
 ## New labels and sub-labels
 

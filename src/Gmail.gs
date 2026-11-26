@@ -35,9 +35,10 @@ function isUserLabelName(name) {
  * own "Sorter/..." labels); otherwise the sorter never invents a parent.
  *
  * @param {string} name
- * @param {string} [hide] 'all' hides it everywhere; 'messages' hides the chip
- *   on emails but keeps it in the label list. Needs the Gmail advanced
- *   service; without it the label is created visible.
+ * @param {string} [hide] 'all' hides it everywhere; 'list' keeps it out of
+ *   your Gmail sidebar but shows it on emails; 'messages' hides it on emails
+ *   but shows it in the sidebar. Needs the Gmail advanced service; without it
+ *   the label is created visible.
  * @param {boolean} [createParents]
  */
 function ensureLabel(name, hide, createParents) {
@@ -52,8 +53,8 @@ function ensureLabel(name, hide, createParents) {
     try {
       Gmail.Users.Labels.create({
         name: name,
-        labelListVisibility: hide === 'all' ? 'labelHide' : 'labelShow',
-        messageListVisibility: 'hide'
+        labelListVisibility: hide === 'messages' ? 'labelShow' : 'labelHide',
+        messageListVisibility: hide === 'list' ? 'show' : 'hide'
       }, 'me');
       label = GmailApp.getUserLabelByName(name);
     } catch (e) {
@@ -66,12 +67,36 @@ function ensureLabel(name, hide, createParents) {
 }
 
 /** Creates the sorter's own labels. */
+/**
+ * Creates the sorter's own labels, kept out of your Gmail sidebar. The
+ * "Sorter/Always keep" and "Sorter/Always archive" labels still appear in
+ * the "Label as" menu on an email.
+ */
 function ensureSorterLabels() {
   ensureLabel(SORTER_LABELS.SORTED, 'all');
-  ensureLabel(SORTER_LABELS.PARENT);
-  ensureLabel(SORTER_LABELS.ARCHIVED, 'messages', true);
-  ensureLabel(SORTER_LABELS.ALWAYS_KEEP, null, true);
-  ensureLabel(SORTER_LABELS.ALWAYS_ARCHIVE, null, true);
+  ensureLabel(SORTER_LABELS.PARENT, 'list');
+  ensureLabel(SORTER_LABELS.ARCHIVED, 'all');
+  ensureLabel(SORTER_LABELS.ALWAYS_KEEP, 'list');
+  ensureLabel(SORTER_LABELS.ALWAYS_ARCHIVE, 'list');
+  hideSorterLabels();
+}
+
+/**
+ * Takes labels the sorter created out of your Gmail sidebar (they keep
+ * working, and stay searchable). Returns false when the Gmail advanced
+ * service is unavailable.
+ */
+function hideSorterLabels() {
+  if (typeof Gmail === 'undefined') return false;
+  var names = [SORTER_LABELS.SORTED, SORTER_LABELS.PARENT, SORTER_LABELS.ARCHIVED, SORTER_LABELS.ALWAYS_KEEP,
+    SORTER_LABELS.ALWAYS_ARCHIVE, getConfig('outreach_label')].map(function(n) { return n.toLowerCase(); });
+  var labels = (Gmail.Users.Labels.list('me') || {}).labels || [];
+  labels.forEach(function(l) {
+    if (names.indexOf(String(l.name).toLowerCase()) >= 0 && l.labelListVisibility !== 'labelHide') {
+      Gmail.Users.Labels.patch({ labelListVisibility: 'labelHide' }, 'me', l.id);
+    }
+  });
+  return true;
 }
 
 /**
@@ -79,13 +104,13 @@ function ensureSorterLabels() {
  * already exist ("Work/Tech" also gets "Work" if you have a "Work" label).
  * A parent that doesn't exist is never created.
  */
-function applyLabel(thread, name) {
+function applyLabel(thread, name, hide) {
   var parts = String(name).split('/');
   for (var i = 1; i < parts.length; i++) {
     var parent = findLabel(parts.slice(0, i).join('/'));
     if (parent) thread.addLabel(parent);
   }
-  thread.addLabel(ensureLabel(name));
+  thread.addLabel(ensureLabel(name, hide));
 }
 
 /** "Work/Clients/Acme" -> ["Work", "Work/Clients", "Work/Clients/Acme"] */

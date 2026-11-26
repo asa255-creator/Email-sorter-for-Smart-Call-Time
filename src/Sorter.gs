@@ -33,6 +33,7 @@ function runSorter_(opts) {
     _labelCache = null;
     _configCache = null;
     var now = Date.now();
+    hideSorterLabelsOnce_();
     var state = loadState();
     var work = scanForWork_(state);
     var sweepDue = opts.forceSweep || now - Number(getStatus('last_sweep') || 0) > SWEEP_EVERY_MS;
@@ -357,7 +358,11 @@ function applyDecision_(run, thread, f, d) {
   var id = f.threadId;
   var names = (d.labels || []).slice();
   if (d.review && run.reviewLabel) names.push(run.reviewLabel);
-  names.forEach(function(n) { applyLabel(thread, n); });
+  names.forEach(function(n) {
+    // The sorter's own category labels stay out of your sidebar; you see them on the email.
+    var own = n === run.outreachLabel || n === run.reviewLabel;
+    applyLabel(thread, n, own ? 'list' : null);
+  });
 
   var lastMs = f.lastMessageDate.getTime();
   stateDelete(run.state, STATE_PREFIX.DUE, id);
@@ -387,7 +392,7 @@ function applyDecision_(run, thread, f, d) {
 function archiveThread_(run, thread, id, markRead) {
   if (markRead) thread.markRead();
   thread.moveToArchive();
-  thread.addLabel(ensureLabel(SORTER_LABELS.ARCHIVED, 'messages', true));
+  thread.addLabel(ensureLabel(SORTER_LABELS.ARCHIVED, 'all'));
   stateSet(run.state, STATE_PREFIX.ARCHIVED, id, Date.now());
   run.stats.archived++;
 }
@@ -432,6 +437,16 @@ function handleSortError_(run, thread, e) {
   }
   logEvent(run, 'Error', 'Could not sort this yet (' + (e && e.message) + '). Will try again.',
     thread.getId(), subject);
+}
+
+/** Hides the sorter's labels from your sidebar once (also fixes labels made visible by older versions). */
+function hideSorterLabelsOnce_() {
+  if (getStatus('sorter_labels_hidden') === '1') return;
+  try {
+    if (hideSorterLabels()) setStatus('sorter_labels_hidden', '1');
+  } catch (e) {
+    console.warn('Could not hide the Sorter labels: ' + e.message);
+  }
 }
 
 /** The reason Claude is unusable right now, or '' (re-checked hourly). */

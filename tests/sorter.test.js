@@ -670,3 +670,18 @@ test('Remove a label deletes exactly that label and its sheet row, nothing else'
   const names = ss.getSheetByName('Labels').data(1).map((r) => r[0]);
   assert.ok(!names.includes('invoices') && names.includes('invoices/recipts'));
 });
+
+test('the sorter keeps its own labels out of your Gmail sidebar, including ones made visible earlier', () => {
+  const w = upgradedWorld(() => claudeOk({}));
+  const { ctx: S, gmail, scriptProps } = w;
+  // As an older version left them: visible in the sidebar.
+  ['Sorter', 'Sorter/Archived', 'Sorter/Always keep', 'Sorter/Always archive'].forEach((n) => {
+    gmail.label(n).listVisibility = 'labelShow';
+  });
+  gmail.label('scts').listVisibility = 'labelShow';
+  scriptProps.deleteProperty('status_sorter_labels_hidden');
+  S.runSorter();
+  ['Sorter', 'Sorter/Archived', 'Sorter/Always keep', 'Sorter/Always archive', '_sorted'].forEach((n) =>
+    assert.equal(gmail.label(n).listVisibility, 'labelHide', n));
+  assert.equal(gmail.label('scts').listVisibility, 'labelShow', 'your own labels are untouched');
+});
