@@ -29,6 +29,9 @@ function runSorter_(opts) {
   if (!lock.tryLock(10000)) return { busy: true };
   var run = null;
   try {
+    // Start every run from what Gmail and the sheets say now.
+    _labelCache = null;
+    _configCache = null;
     var now = Date.now();
     var state = loadState();
     var work = scanForWork_(state);
@@ -352,15 +355,12 @@ function getPrompt_(run) {
 
 function applyDecision_(run, thread, f, d) {
   var id = f.threadId;
-  var names = expandLabelAncestors(d.labels || []);
+  var names = (d.labels || []).slice();
   if (d.review && run.reviewLabel) names.push(run.reviewLabel);
-  names.forEach(function(n) { thread.addLabel(ensureLabel(n)); });
-  thread.addLabel(ensureLabel(SORTER_LABELS.SORTED, 'all'));
+  names.forEach(function(n) { applyLabel(thread, n); });
 
   var lastMs = f.lastMessageDate.getTime();
-  stateSet(run.state, STATE_PREFIX.SEEN, id, lastMs);
   stateDelete(run.state, STATE_PREFIX.DUE, id);
-  run.stats.sorted++;
 
   if (d.action === ACTIONS.ARCHIVE) {
     archiveThread_(run, thread, id, false);
@@ -376,12 +376,18 @@ function applyDecision_(run, thread, f, d) {
   } else {
     run.stats.kept++;
   }
+
+  // Only now is the conversation marked as done. If archiving or marking read
+  // failed above, it stays unmarked, is retried next run, and the error is logged.
+  thread.addLabel(ensureLabel(SORTER_LABELS.SORTED, 'all'));
+  stateSet(run.state, STATE_PREFIX.SEEN, id, lastMs);
+  run.stats.sorted++;
 }
 
 function archiveThread_(run, thread, id, markRead) {
   if (markRead) thread.markRead();
   thread.moveToArchive();
-  thread.addLabel(ensureLabel(SORTER_LABELS.ARCHIVED, 'messages'));
+  thread.addLabel(ensureLabel(SORTER_LABELS.ARCHIVED, 'messages', true));
   stateSet(run.state, STATE_PREFIX.ARCHIVED, id, Date.now());
   run.stats.archived++;
 }

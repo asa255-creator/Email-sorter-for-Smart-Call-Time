@@ -81,7 +81,10 @@ function pruneIdeas_(ideas, now) {
 function considerLabelIdea(run, ai, f) {
   var name = ai.new_label;
   if (!name || ai.sender_type === 'cold_outreach') return;
-  if (run.labels.map[name.toLowerCase()]) return; // already a label
+  if (run.labels.map[name.toLowerCase()] || findLabel(name)) return; // already a label
+  // Only sub-labels of a label you already have: the sorter never invents a parent label.
+  var slash = name.lastIndexOf('/');
+  if (slash > 0 && !findLabel(name.substring(0, slash))) return;
   if (!run.ideas) run.ideas = loadIdeas();
   var idea = addLabelIdea(run.ideas, name, ai.new_label_description, f.threadId, run.now,
     getConfigNumber('new_label_after'));
@@ -109,7 +112,7 @@ function createLabelFromIdea_(run, idea) {
     var t = null;
     try { t = GmailApp.getThreadById(id); } catch (e) { t = null; }
     if (!t) return;
-    expandLabelAncestors([idea.name]).forEach(function(n) { t.addLabel(ensureLabel(n)); });
+    applyLabel(t, idea.name);
     filed++;
   });
   delete run.ideas[idea.name.toLowerCase()];

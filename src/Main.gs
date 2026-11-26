@@ -13,6 +13,7 @@ function onOpen() {
     .addItem('Suggest labels from my mail…', 'suggestLabels')
     .addItem('Apply checked suggestions', 'applySuggestions')
     .addItem('Sync labels from Gmail', 'syncLabelsFromMenu')
+    .addItem('Remove a label…', 'removeLabelFromMenu')
     .addSeparator()
     .addSubMenu(ui.createMenu('Settings')
       .addItem('Set Claude API key…', 'setApiKeyFromMenu')
@@ -167,6 +168,49 @@ function sortNowFromMenu() {
     (stats.moreToDo ? '\n\nThere is more to do; it carries on automatically every ' + runInterval_() + ' minute' +
       (runInterval_() === 1 ? '' : 's') + '.' : '') +
     (problem ? '\n\nProblem: ' + problem : '') + '\n\nDetails are on the Log sheet.', ui.ButtonSet.OK);
+}
+
+/**
+ * Deletes exactly one Gmail label (by its id), and its row on the Labels
+ * sheet. Emails are not deleted and keep their other labels; labels whose
+ * names start with the same text (invoices/recipts for invoices) are separate
+ * labels and are not touched.
+ */
+function removeLabelFromMenu() {
+  var ui = SpreadsheetApp.getUi();
+  var r = ui.prompt('Remove a label',
+    'Type the exact name of the Gmail label to remove, for example: invoices\n\n' +
+    'Only that one label is removed. No emails are deleted, and other labels are not touched, including ' +
+    'ones whose names start the same way (such as invoices/recipts).', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  var name = r.getResponseText().trim();
+  if (!name) return;
+  _labelCache = null;
+  var label = findLabel(name);
+  if (!label || label.getName().toLowerCase() !== name.toLowerCase()) {
+    ui.alert('Not found', 'There is no Gmail label named "' + name + '".', ui.ButtonSet.OK);
+    return;
+  }
+  if (!isUserLabelName(label.getName())) {
+    ui.alert('Not removed', 'That label belongs to the sorter and is needed.', ui.ButtonSet.OK);
+    return;
+  }
+  var count = label.getThreads(0, 500).length;
+  var ok = ui.alert('Remove "' + label.getName() + '"?',
+    'It is on ' + (count >= 500 ? '500 or more' : count) + ' conversation' + (count === 1 ? '' : 's') + '. ' +
+    'They stay in Gmail with all their other labels.', ui.ButtonSet.OK_CANCEL);
+  if (ok !== ui.Button.OK) return;
+
+  label.deleteLabel();
+  _labelCache = null;
+  var sheet = SpreadsheetApp.getActive().getSheetByName('Labels');
+  if (sheet && sheet.getLastRow() > 1) {
+    var names = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    for (var i = names.length - 1; i >= 0; i--) {
+      if (String(names[i][0]).trim().toLowerCase() === name.toLowerCase()) sheet.deleteRow(i + 2);
+    }
+  }
+  ui.alert('Removed', '"' + label.getName() + '" was removed from Gmail and from the Labels sheet.', ui.ButtonSet.OK);
 }
 
 function syncLabelsFromMenu() {

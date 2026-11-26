@@ -174,6 +174,10 @@ class FakeLabel {
     return this.gmail.threads.filter((t) => t.labels.has(this.name)).slice(start, start + max);
   }
   removeFromThreads(threads) { threads.forEach((t) => t.labels.delete(this.name)); return this; }
+  deleteLabel() {
+    delete this.gmail.labels[this.name.toLowerCase()];
+    this.gmail.threads.forEach((t) => t.labels.delete(this.name));
+  }
 }
 
 class FakeMessage {

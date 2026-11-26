@@ -79,7 +79,8 @@ function buildClassifierSystemPrompt(labels, notes, corrections, relabels) {
     'needs_attention: true when the person should see this soon even though a system or list sent it: a ' +
     'failed payment, an unexpected security alert, a deadline, something waiting on them. ' +
     'False for routine confirmations, digests and marketing, and always false for cold_outreach (a sales ' +
-    'pitch asking for a call is not something waiting on them).',
+    'pitch asking for a call is not something waiting on them). A sale ending, a discount deadline, a webinar ' +
+    'or event invitation, or "one week away" in a promotion is marketing, not a deadline for the person.',
     '',
     'confidence: high when both the sender type and the labels are clear; medium when they are probably right; ' +
     'low when you are guessing. Low-confidence emails stay in the inbox for the person to check.',

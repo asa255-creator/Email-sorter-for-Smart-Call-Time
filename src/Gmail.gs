@@ -30,19 +30,22 @@ function isUserLabelName(name) {
 }
 
 /**
- * Returns a Gmail label, creating it (and its parents) if needed.
+ * Returns a Gmail label, creating it if needed. Parent labels are only
+ * created when createParents is true (labels you approved, or the sorter's
+ * own "Sorter/..." labels); otherwise the sorter never invents a parent.
  *
  * @param {string} name
  * @param {string} [hide] 'all' hides it everywhere; 'messages' hides the chip
  *   on emails but keeps it in the label list. Needs the Gmail advanced
  *   service; without it the label is created visible.
+ * @param {boolean} [createParents]
  */
-function ensureLabel(name, hide) {
+function ensureLabel(name, hide, createParents) {
   var existing = findLabel(name);
   if (existing) return existing;
 
   var slash = name.lastIndexOf('/');
-  if (slash > 0) ensureLabel(name.substring(0, slash));
+  if (slash > 0 && createParents) ensureLabel(name.substring(0, slash), null, true);
 
   var label = null;
   if (hide && typeof Gmail !== 'undefined') {
@@ -66,9 +69,23 @@ function ensureLabel(name, hide) {
 function ensureSorterLabels() {
   ensureLabel(SORTER_LABELS.SORTED, 'all');
   ensureLabel(SORTER_LABELS.PARENT);
-  ensureLabel(SORTER_LABELS.ARCHIVED, 'messages');
-  ensureLabel(SORTER_LABELS.ALWAYS_KEEP);
-  ensureLabel(SORTER_LABELS.ALWAYS_ARCHIVE);
+  ensureLabel(SORTER_LABELS.ARCHIVED, 'messages', true);
+  ensureLabel(SORTER_LABELS.ALWAYS_KEEP, null, true);
+  ensureLabel(SORTER_LABELS.ALWAYS_ARCHIVE, null, true);
+}
+
+/**
+ * Puts a label on a conversation, plus whichever of its parent labels
+ * already exist ("Work/Tech" also gets "Work" if you have a "Work" label).
+ * A parent that doesn't exist is never created.
+ */
+function applyLabel(thread, name) {
+  var parts = String(name).split('/');
+  for (var i = 1; i < parts.length; i++) {
+    var parent = findLabel(parts.slice(0, i).join('/'));
+    if (parent) thread.addLabel(parent);
+  }
+  thread.addLabel(ensureLabel(name));
 }
 
 /** "Work/Clients/Acme" -> ["Work", "Work/Clients", "Work/Clients/Acme"] */

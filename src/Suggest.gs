@@ -273,7 +273,7 @@ function applySuggestions() {
   var parsed = parseSuggestionsSheet(sheet.getRange(1, 1, sheet.getLastRow(), 6).getValues());
 
   parsed.labels.forEach(function(l) {
-    ensureLabel(l.name);
+    ensureLabel(l.name, null, true); // you ticked it, so its parent may be created too
     upsertLabelRow(l.name, l.description, l.action, l.action === ACTIONS.ARCHIVE_LATER ? l.days : '');
   });
   syncLabelsToSheet();

@@ -379,11 +379,20 @@ test('Claude can create a new sub-label after suggesting it for three different 
   const { ss, ctx: S, gmail } = w;
   ['shop1', 'shop2', 'shop3'].forEach((id, i) => gmail.addThread(id, [{ from: 'orders@' + id + '.com', to: ME,
     subject: 'Your receipt', date: ago((i + 1) * HOUR) }]));
+  // Without a Finance label, a Finance/... idea is ignored: the sorter never invents a parent.
+  S.runSorter();
+  assert.equal(gmail.getUserLabelByName('Finance/Receipts'), null);
+  assert.equal(gmail.getUserLabelByName('Finance'), null);
+
+  gmail.label('Finance');
+  ['shop4', 'shop5', 'shop6'].forEach((id, i) => gmail.addThread(id, [{ from: 'orders@' + id + '.com', to: ME,
+    subject: 'Your receipt', date: ago((i + 1) * 60000) }]));
+  ['shop1', 'shop2', 'shop3'].forEach((id) => gmail.thread(id).labels.delete('_sorted'));
   const stats = S.runSorter();
   assert.equal(stats.labelsCreated, 1);
   assert.ok(gmail.getUserLabelByName('Finance/Receipts'));
-  assert.ok(gmail.getUserLabelByName('Finance'), 'parent created too');
-  ['shop1', 'shop2', 'shop3'].forEach((id) => assert.ok(gmail.thread(id).labels.has('Finance/Receipts'), id));
+  ['shop4', 'shop5', 'shop6'].forEach((id) => assert.ok(gmail.thread(id).labels.has('Finance/Receipts'), id));
+  assert.ok(gmail.thread('shop4').labels.has('Finance'), 'existing parent applied');
   const row = S.readLabels().map['finance/receipts'];
   assert.equal(row.description, 'Receipts and invoices for purchases');
   assert.equal(row.action, 'Keep in inbox');
@@ -394,6 +403,7 @@ test('Claude can create a new sub-label after suggesting it for three different 
   const w2 = upgradedWorld(() => claudeOk({ reason: 'Receipt.', sender_type: 'automated', labels: [],
     needs_attention: false, confidence: 'high', new_label: 'Finance/Receipts', new_label_description: 'Receipts' }));
   w2.ctx.setConfig('auto_create_labels', 'no');
+  w2.gmail.label('Finance');
   ['a', 'b', 'c'].forEach((id) => w2.gmail.addThread(id, [{ from: 'x@' + id + '.com', to: ME, subject: 'r', date: ago(HOUR) }]));
   w2.ctx.runSorter();
   assert.equal(w2.gmail.getUserLabelByName('Finance/Receipts'), null);
@@ -603,4 +613,60 @@ test('mark_read_after_days marks old unread mail read, but not a conversation wi
   assert.equal(gmail.thread('fresh-reply').unread, true, 'a newer reply keeps it unread');
   assert.equal(gmail.thread('recent').unread, true);
   assert.match(ss.getSheetByName('Log').data(7)[0][6], /Marked 2 conversations read that had been unread for over 7 days/);
+});
+
+test('if archiving fails, the email is not marked done: it is retried and the error is logged', () => {
+  const w = upgradedWorld(() => claudeOk({}));
+  const { ss, ctx: S, gmail } = w;
+  const t = gmail.addThread('ci', [{ from: 'GitHub <notifications@github.com>', to: ME, subject: '[o/r] Run succeeded: CI',
+    cc: 'ci_activity@noreply.github.com', date: ago(HOUR) }]);
+  const realArchive = t.moveToArchive.bind(t);
+  t.moveToArchive = () => { throw new Error('Service unavailable: Gmail'); };
+  S.runSorter();
+  assert.equal(t.inbox, true);
+  assert.ok(!t.labels.has('_sorted'), 'not marked done');
+  assert.match(ss.getSheetByName('Log').data(7)[0][6], /Service unavailable: Gmail.*Will try again/);
+
+  t.moveToArchive = realArchive;
+  S.runSorter();
+  assert.equal(t.inbox, false, 'archived on the retry');
+  assert.ok(t.labels.has('_sorted'));
+});
+
+test('a sub-label whose parent does not exist never creates the parent (invoices/recipts)', () => {
+  const w = upgradedWorld(() => claudeOk({ reason: 'Receipt.', sender_type: 'automated', labels: ['invoices/recipts'],
+    needs_attention: false, confidence: 'high', new_label: '', new_label_description: '' }));
+  const { ctx: S, gmail } = w;
+  gmail.label('invoices/recipts');
+  gmail.label('scts');
+  gmail.label('scts/tech');
+  S.syncLabelsToSheet();
+  gmail.addThread('r', [{ from: 'billing@slack.example', to: ME, subject: 'Receipt', date: ago(HOUR) }]);
+  S.runSorter();
+  assert.ok(gmail.thread('r').labels.has('invoices/recipts'));
+  assert.equal(gmail.getUserLabelByName('invoices'), null, 'no stray "invoices" label');
+
+  // An existing parent is still applied.
+  const t = gmail.addThread('tech', [{ from: 'x@y.example', to: ME, subject: 'Audit', date: ago(60000) }]);
+  S.applyLabel(t, 'scts/tech');
+  assert.ok(t.labels.has('scts') && t.labels.has('scts/tech'));
+});
+
+test('Remove a label deletes exactly that label and its sheet row, nothing else', () => {
+  const w = loadSorter({ me: ME, uiAnswers: ['invoices'] });
+  const { ctx: S, gmail, ss, ui } = w;
+  S.ensureConfigSheet(ss);
+  S.ensureLabelsSheet(ss, []);
+  ['invoices', 'invoices/recipts', 'Promotional'].forEach((n) => gmail.label(n));
+  S.syncLabelsToSheet();
+  const t = gmail.addThread('r', [{ from: 'a@b.example', to: ME, subject: 'Receipt', date: ago(HOUR) }],
+    { labels: ['invoices', 'invoices/recipts'] });
+  S.removeLabelFromMenu();
+  assert.equal(ui.alerts[ui.alerts.length - 1].title, 'Removed');
+  assert.equal(gmail.getUserLabelByName('invoices'), null);
+  assert.ok(gmail.getUserLabelByName('invoices/recipts'), 'the real label is untouched');
+  assert.ok(t.labels.has('invoices/recipts') && !t.labels.has('invoices'));
+  assert.ok(gmail.threads.includes(t), 'no email deleted');
+  const names = ss.getSheetByName('Labels').data(1).map((r) => r[0]);
+  assert.ok(!names.includes('invoices') && names.includes('invoices/recipts'));
 });
