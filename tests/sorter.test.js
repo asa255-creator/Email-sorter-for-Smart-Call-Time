@@ -485,3 +485,28 @@ test('an upgrade interrupted by a Google timeout loses nothing and carries on wh
   assert.equal(w.userProps.getProperty('claude_api_key'), 'sk-ant-old-key');
   assert.equal(w.triggers.length, 1);
 });
+
+test('descriptions wiped by an earlier upgrade come back from a copied "Labels (old)" tab', () => {
+  const w = upgradedWorld();
+  const { ss, ctx: S, ui } = w;
+  // The situation after the old code's interrupted upgrade: rows exist, descriptions blank.
+  const labels = ss.getSheetByName('Labels');
+  for (let r = 2; r <= labels.getLastRow(); r++) if (!/sorter/i.test(labels.get(r, 6))) labels.set(r, 2, '');
+  assert.equal(S.readLabels().map.newsletters.description, '');
+  labels.set(2, 3, 'Archive'); // a choice you made since then is kept
+
+  // You copy the old Labels tab back from version history and name it "Labels (old)".
+  const old = ss.insertSheet('Labels (old)');
+  [['Label Name', 'Label ID', 'Nested Path', 'Type', 'Description', 'Last Synced'],
+    ['Clients', 'Clients', '', 'Top-level', 'Customers and prospects I am working with', ''],
+    ['Newsletters', 'Newsletters', '', 'Top-level', 'Newsletters and digests I subscribed to', '']]
+    .forEach((r) => old.appendRow(r));
+
+  S.setupSorter();
+  assert.equal(ui.alerts[ui.alerts.length - 1].title, 'Email Sorter is set up');
+  const map = S.readLabels().map;
+  assert.equal(map.clients.description, 'Customers and prospects I am working with');
+  assert.equal(map.newsletters.description, 'Newsletters and digests I subscribed to');
+  assert.equal(map.clients.action, 'Archive', 'nothing else on the sheet is undone');
+  assert.equal(ss.getSheetByName('Labels (old)'), null);
+});
